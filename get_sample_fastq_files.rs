@@ -1,11 +1,11 @@
-use std::env;
-use md5::Md5;
-use md5::Digest; 
-use std::collections::HashMap;
-use std::fs::{self, File};
-use std::io::{self, Read, BufRead, BufReader, Write};
-use std::path::Path;
+extern crate md5;
 
+use std::collections::HashMap;
+use std::env;
+use std::fs::{self, File};
+use std::io::{Read, BufRead, BufReader, Write};
+use std::path::Path;
+use md5::{Md5, Digest};
 use walkdir::WalkDir;
 
 
@@ -66,6 +66,16 @@ fn parse_filename_split(file_path: &str) -> Option<(String, String, String)> {
     Some((sample, lane, read_type))
 }
 
+/*fn parse_filename(file_path: &str, re1: &Regex, re2: &Regex) -> Option<(String, String, String)> {
+    if let Some(caps) = re1.captures(file_path) {
+        return Some((caps[1].to_string(), caps[2].to_string(), caps[3].to_string()));
+    }
+    if let Some(caps) = re2.captures(file_path) {
+        return Some((caps[1].to_string(), caps[2].to_string(), caps[3].to_string()));
+    }
+    None
+}*/
+
 
 fn write_sample_files(path: &str, data: &HashMap<String, HashMap<String, String>>) {
     let mut file = File::create(path).expect("Could not create sample file");
@@ -91,37 +101,6 @@ fn write_md5_files(path: &str, data: &HashMap<String, HashMap<String, String>>) 
     }
 }
 
-fn compute_file_md5_incremental(file_path: &str) -> io::Result<String> {
-    // Open the file for reading
-    let mut file = File::open(file_path)?;
-
-    // Create a new Md5 hasher instance
-    let mut hasher = Md5::new();
-
-    // Define a buffer size for reading chunks (4 KB in this example)
-    let mut buffer = [0; 4096];  // 4 KB buffer
-    
-    // Read the file in chunks
-    loop {
-        // Read a chunk of data into the buffer
-        let bytes_read = file.read(&mut buffer)?;
-
-        // If no bytes were read, we've reached the end of the file
-        if bytes_read == 0 {
-            break;
-        }
-
-        // Update the hash with the data from this chunk
-        hasher.update(&buffer[..bytes_read]);
-    }
-
-    // Finalize the hash and get the result
-    let result = hasher.finalize();
-
-    // Return the hash in hexadecimal format as a string
-    Ok(format!("{:x}", result))
-}
-
 fn get_md5sum(file_path: &str) -> String {
     let path = Path::new(file_path);
     let md5_file = path.with_extension("fastq.gz.md5sum");
@@ -133,10 +112,16 @@ fn get_md5sum(file_path: &str) -> String {
             }
         }
     }
-
-    if let Ok(md5sum) = compute_file_md5_incremental(file_path) {
-        let _ = fs::write(&md5_file, &md5sum);
-        return md5sum;
+    if let Ok(mut file) = File::open(path) {
+        let mut hasher = Md5::new();
+        let mut buffer = vec![0; 8192];
+        while let Ok(bytes) = file.read(&mut buffer) {
+            if bytes == 0 { break; }
+            hasher.update(&buffer[..bytes]);
+        }
+        let result = format!("{:x}", hasher.finalize());
+        let _ = fs::write(&md5_file, &result);
+        return result;
     }
     "none".to_string()
 }
