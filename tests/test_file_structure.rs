@@ -2,6 +2,8 @@ use std::path::Path;
 use std::fs::{self, File, };
 use std::io::Write;
 
+use rust_geo_prep::*;
+
 fn create_fastq_file(path: &Path, content: &str) {
     let mut file = File::create(path).expect("Unable to create file");
     file.write_all(content.as_bytes())
@@ -45,5 +47,28 @@ fn create_and_check_fastq_files() {
     for (file_name, _) in files_and_contents {
         let file_path = data_dir.join(file_name);
         assert!(file_path.exists(), "File {} does not exist", file_name);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+	use rust_geo_prep::parse_filename_split;
+    #[test]
+    fn test_parse_filename_split() {
+        let files_and_contents = vec![
+            ("example1_S1_L001_R1.fastq.gz", ("example1".to_string(),  "R1".to_string())),
+            ("example1_S1_L001_R2.fastq.gz", ("example1".to_string(),  "R2".to_string())),
+            ("example1_S1_L001_I1.fastq.gz", ("example1".to_string(),  "I1".to_string())),
+            ("example2_L001_R1.fastq.gz", ("example2".to_string(),  "R1".to_string())),
+            ("example2_L001_R2.fastq.gz", ("example2".to_string(),  "R2".to_string())),
+            ("example3_1_R1.fastq.gz", ("example3_1".to_string(),  "R1".to_string())),
+            ("example3_1_R2.fastq.gz", ("example3_1".to_string(),  "R2".to_string())),
+            ("example3_1_I1.fastq.gz", ("example3_1".to_string(),  "I1".to_string())),
+        ];
+
+        for (file, expected) in files_and_contents {
+            let result = parse_filename_split(file);
+            assert_eq!(result, Some(expected), "Failed for file: {}", file);
+        }
     }
 }

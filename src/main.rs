@@ -1,13 +1,8 @@
+
 use std::env;
-use md5::Md5;
-use md5::Digest; 
+use rust_geo_prep::*;
 use std::collections::HashMap;
-use std::fs::{self, File};
-use std::io::{self, Read, BufRead, BufReader, Write};
-use std::path::Path;
-
 use walkdir::WalkDir;
-
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -19,6 +14,9 @@ fn main() {
     let sample_file_path = format!("{}/sample_collection_{}.sample_lines.tsv", path_sanitized, sampleid);
     let files_file_path = format!("{}/sample_collection_{}.files_md5sum_lines.tsv", path_sanitized, sampleid);
     
+    let sample_file_path_basename = format!("{}/sample_collection_basename_{}.sample_lines.tsv", path_sanitized, sampleid);
+    let files_file_path_basename = format!("{}/sample_collection_basename_{}.files_md5sum_lines.tsv", path_sanitized, sampleid);
+
     let mut data: HashMap<String, HashMap<String, String>> = HashMap::new();
     
     //let re1 = Regex::new(r".*/(.*?)_(S.*L\d{3}).*(R[12]|I1).*\\.fastq\\.gz").unwrap();
@@ -30,9 +28,8 @@ fn main() {
             if file_name.ends_with(".fastq.gz") {
                 let path_str = file_path.to_string_lossy().to_string();
                 //if let Some(captures) = parse_filename(&path_str, &re1, &re2) {
-                if let Some(captures) = parse_filename_split(&path_str) {
-                    let (sample, lane, read_type) = captures;
-                    data.entry(format!("{}_{}", sample, lane))
+                if let Some( (sample, read_type) ) = parse_filename_split(&path_str) {
+                    data.entry(format!("{}", sample))
                         .or_default()
                         .insert(read_type, path_str);
                 }
@@ -42,102 +39,14 @@ fn main() {
     
     write_sample_files(&sample_file_path, &data);
     write_md5_files(&files_file_path, &data);
-    println!("Data written to '{}'", sample_file_path);
+    write_sample_files(&sample_file_path_basename, &data);
+    write_md5_files(&files_file_path_basename, &data);
+    println!("Data written to '{}', '{}', '{}' and '{}'", 
+        &sample_file_path,
+        &files_file_path, 
+        &sample_file_path_basename,
+        &files_file_path_basename
+    );
 }
 
-
-fn parse_filename_split(file_path: &str) -> Option<(String, String, String)> {
-    let parts: Vec<&str> = file_path.split('/').last()?.split('_').collect();
-
-    if parts.len() < 3 {
-        return None;
-    }
-
-    // Read type is typically R1, R2, or I1, usually near the end
-    let read_type = parts.last()?.to_string();
-
-    // Find lane information, which often has 'S' and 'L' markers
-    let lane_idx = parts.iter().position(|&s| s.starts_with('S'))?;
-    let lane = parts.get(lane_idx)?.to_string();
-
-    // The sample name is everything before the lane info
-    let sample = parts[..lane_idx].join("_");
-
-    Some((sample, lane, read_type))
-}
-
-
-fn write_sample_files(path: &str, data: &HashMap<String, HashMap<String, String>>) {
-    let mut file = File::create(path).expect("Could not create sample file");
-    writeln!(file, "Sample_Lane\tR1\tR2\tI1").unwrap();
-    for (sample_lane, reads) in data {
-        writeln!(file, "{}\t{}\t{}\t{}", 
-                 sample_lane,
-                 reads.get("R1").unwrap_or(&"MISSING_R1".to_string()),
-                 reads.get("R2").unwrap_or(&"MISSING_R2".to_string()),
-                 reads.get("I1").unwrap_or(&"MISSING_I1".to_string())
-        ).unwrap();
-    }
-}
-
-fn write_md5_files(path: &str, data: &HashMap<String, HashMap<String, String>>) {
-    let mut file = File::create(path).expect("Could not create md5 file");
-    writeln!(file, "file_name\tmd5sum").unwrap();
-    for reads in data.values() {
-        for file_path in reads.values() {
-            let md5sum = get_md5sum(file_path);
-            writeln!(file, "{}\t{}", file_path, md5sum).unwrap();
-        }
-    }
-}
-
-fn compute_file_md5_incremental(file_path: &str) -> io::Result<String> {
-    // Open the file for reading
-    let mut file = File::open(file_path)?;
-
-    // Create a new Md5 hasher instance
-    let mut hasher = Md5::new();
-
-    // Define a buffer size for reading chunks (4 KB in this example)
-    let mut buffer = [0; 4096];  // 4 KB buffer
-    
-    // Read the file in chunks
-    loop {
-        // Read a chunk of data into the buffer
-        let bytes_read = file.read(&mut buffer)?;
-
-        // If no bytes were read, we've reached the end of the file
-        if bytes_read == 0 {
-            break;
-        }
-
-        // Update the hash with the data from this chunk
-        hasher.update(&buffer[..bytes_read]);
-    }
-
-    // Finalize the hash and get the result
-    let result = hasher.finalize();
-
-    // Return the hash in hexadecimal format as a string
-    Ok(format!("{:x}", result))
-}
-
-fn get_md5sum(file_path: &str) -> String {
-    let path = Path::new(file_path);
-    let md5_file = path.with_extension("fastq.gz.md5sum");
-    if md5_file.exists() {
-        if let Ok(file) = File::open(&md5_file) {
-            let reader = BufReader::new(file);
-            if let Some(Ok(line)) = reader.lines().next() {
-                return line;
-            }
-        }
-    }
-
-    if let Ok(md5sum) = compute_file_md5_incremental(file_path) {
-        let _ = fs::write(&md5_file, &md5sum);
-        return md5sum;
-    }
-    "none".to_string()
-}
 
