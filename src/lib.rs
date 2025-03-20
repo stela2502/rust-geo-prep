@@ -17,20 +17,20 @@ pub fn parse_filename_split(file_path: &str) -> Option<(String, String)> {
     for part in &parts {
         if part.starts_with('S') && part.len() > 1 && part[1..].chars().all(|c| c.is_digit(10) ) {
             // Skip over "S" and "L" parts, which are lane-related
-            println!("Skipping {}", part);
+            //println!("Skipping {}", part);
             continue;
         } else if part.starts_with('L') && part.len() == 4 && part[1..].chars().all(|c| c.is_digit(10) ) {
             // Skip the "L" part, which is lane-related
-            println!("Skipping {}", part);
+            //println!("Skipping {}", part);
             continue;
         } else if part.starts_with("R1") || part.starts_with("R2") || part.starts_with("I1") {
             // This is the read type (R1, R2, I1)
             read_type = Some(part[0..2].to_string());
-            println!("Found an READ part {}", part);
+            //println!("Found an READ part {}", part);
             break
         } else {
             // Otherwise, it's part of the sample name
-            println!("Found an sample part {}", part);
+            //println!("Found an sample part {}", part);
             sample_parts.push(part.to_string());
         }
     }
