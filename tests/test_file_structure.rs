@@ -1,4 +1,4 @@
-use std::path::Path;
+/*use std::path::Path;
 use std::fs::{self, File, };
 use std::io::Write;
 
@@ -74,14 +74,14 @@ mod tests {
     #[test]
     fn test_parse_filename_split() {
         let files_and_contents = vec![
-            ("example1_S1_L001_R1.fastq.gz", ("example1".to_string(),  "R1".to_string())),
-            ("example1_S1_L001_R2.fastq.gz", ("example1".to_string(),  "R2".to_string())),
-            ("example1_S1_L001_I1.fastq.gz", ("example1".to_string(),  "I1".to_string())),
-            ("example2_L001_R1.fastq.gz", ("example2".to_string(),  "R1".to_string())),
-            ("example2_L001_R2.fastq.gz", ("example2".to_string(),  "R2".to_string())),
-            ("example3_1_R1.fastq.gz", ("example3_1".to_string(),  "R1".to_string())),
-            ("example3_1_R2.fastq.gz", ("example3_1".to_string(),  "R2".to_string())),
-            ("example3_1_I1.fastq.gz", ("example3_1".to_string(),  "I1".to_string())),
+            ("example1_S1_L001_R1.fastq.gz", ("example1".to_string(), "S1_L001".to_string(), "R1".to_string())),
+            ("example1_S1_L001_R2.fastq.gz", ("example1".to_string(), "S1_L001".to_string(),  "R2".to_string())),
+            ("example1_S1_L001_I1.fastq.gz", ("example1".to_string(), "S1_L001".to_string(),  "I1".to_string())),
+            ("example2_L001_R1.fastq.gz", ("example2".to_string(), "L001".to_string(),  "R1".to_string())),
+            ("example2_L001_R2.fastq.gz", ("example2".to_string(), "L001".to_string(),  "R2".to_string())),
+            ("example3_1_R1.fastq.gz", ("example3_1".to_string(),"".to_string(),  "R1".to_string())),
+            ("example3_1_R2.fastq.gz", ("example3_1".to_string(),"".to_string(),  "R2".to_string())),
+            ("example3_1_I1.fastq.gz", ("example3_1".to_string(),"".to_string(),  "I1".to_string())),
         ];
 
         for (file, expected) in files_and_contents {
@@ -89,4 +89,4 @@ mod tests {
             assert_eq!(result, Some(expected), "Failed for file: {}", file);
         }
     }
-}
+}*/

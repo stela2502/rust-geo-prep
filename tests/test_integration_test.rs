@@ -54,6 +54,9 @@ fn rust_geo_prep() {
         ("example1_S1_L001_R1.fastq.gz", "@SEQ_ID_1\nAGCTGTTAG\n+\nIIIIIIIIII\n"),
         ("example1_S1_L001_R2.fastq.gz", "@SEQ_ID_2\nTGCTAGTCG\n+\nIIIIIIIIII\n"),
         ("example1_S1_L001_I1.fastq.gz", "@SEQ_ID_3\nACGTGTCG\n+\nIIIIIIIIII\n"),
+        ("example1_S2_L001_R1.fastq.gz", "@SEQ_ID_4\nAGCTGTTAG\n+\nIIIIIIIIII\n"),
+        ("example1_S2_L001_R2.fastq.gz", "@SEQ_ID_5\nTGCTAGTCG\n+\nIIIIIIIIII\n"),
+        ("example1_S2_L001_I1.fastq.gz", "@SEQ_ID_6\nACGTGTCG\n+\nIIIIIIIIII\n"),
         ("example2_L001_R1.fastq.gz", "@SEQ_ID_1\nAGCTGTTAG\n+\nIIIIIIIIII\n"),
         ("example2_L001_R2.fastq.gz", "@SEQ_ID_2\nTGCTAGTCG\n+\nIIIIIIIIII\n"),
         ("example3_1_R1.fastq.gz", "@SEQ_ID_1\nAGCTGTTAG\n+\nIIIIIIIIII\n"),
@@ -114,6 +117,9 @@ fn sample_collection_files_md5sum_lines() {
         ("./info/example1_S1_L001_I1.fastq.gz", "1da0250da36f7f38d11f4f08397e02d9"),
         ("./info/example1_S1_L001_R1.fastq.gz", "220693693f35b15196bc2f2fa8238e7b"),
         ("./info/example1_S1_L001_R2.fastq.gz", "28f6a6cefb6b7ea07049b8261c52cab8"),
+        ("./info/example1_S2_L001_I1.fastq.gz", "933471e0abaab240b18683bc2267f3bc"),
+        ("./info/example1_S2_L001_R1.fastq.gz", "867171df270ed55ca348daf1369f5c25"),
+        ("./info/example1_S2_L001_R2.fastq.gz", "f60431ad04351b3eb786879ed18440c8"),
         ("./info/example2_L001_R1.fastq.gz", "220693693f35b15196bc2f2fa8238e7b"),
         ("./info/example2_L001_R2.fastq.gz", "28f6a6cefb6b7ea07049b8261c52cab8"),
         ("./info/example3_1_I1.fastq.gz", "32a0a8c330f2cdcccafee94b03d1a04e"),
@@ -161,6 +167,9 @@ fn sample_collection_basename_files_md5sum_lines() {
         ("example1_S1_L001_I1.fastq.gz", "1da0250da36f7f38d11f4f08397e02d9"),
         ("example1_S1_L001_R1.fastq.gz", "220693693f35b15196bc2f2fa8238e7b"),
         ("example1_S1_L001_R2.fastq.gz", "28f6a6cefb6b7ea07049b8261c52cab8"),
+        ("example1_S2_L001_I1.fastq.gz", "933471e0abaab240b18683bc2267f3bc"),
+        ("example1_S2_L001_R1.fastq.gz", "867171df270ed55ca348daf1369f5c25"),
+        ("example1_S2_L001_R2.fastq.gz", "f60431ad04351b3eb786879ed18440c8"),
         ("example2_L001_R1.fastq.gz", "220693693f35b15196bc2f2fa8238e7b"),
         ("example2_L001_R2.fastq.gz", "28f6a6cefb6b7ea07049b8261c52cab8"),
         ("example3_1_I1.fastq.gz", "32a0a8c330f2cdcccafee94b03d1a04e"),
@@ -193,17 +202,23 @@ fn sample_collection_basename_files_md5sum_lines() {
 
 #[test]
 fn test_sample_collection_sample_lines() {
-
     // Path to the test file
     let path = "tests/data/sample_collection_sample_lines.tsv";
 
     // Expected values based on your sample file content
     let expected_contents = vec![
-        ("example1", "./info/example1_S1_L001_R1.fastq.gz", "./info/example1_S1_L001_R2.fastq.gz", "./info/example1_S1_L001_I1.fastq.gz"),
-        ("example2", "./info/example2_L001_R1.fastq.gz", "./info/example2_L001_R2.fastq.gz", "MISSING_I1"),
-        ("example3_1", "./info/example3_1_R1.fastq.gz", "./info/example3_1_R2.fastq.gz", "./info/example3_1_I1.fastq.gz")
+        ("example1", vec![
+            "./info/example1_S1_L001_I1.fastq.gz", "./info/example1_S1_L001_R1.fastq.gz", "./info/example1_S1_L001_R2.fastq.gz",
+            "./info/example1_S2_L001_I1.fastq.gz", "./info/example1_S2_L001_R1.fastq.gz", "./info/example1_S2_L001_R2.fastq.gz"
+        ]),
+        ("example2", vec![
+            "./info/example2_L001_R1.fastq.gz", "./info/example2_L001_R2.fastq.gz"
+        ]),
+        ("example3_1", vec![
+            "./info/example3_1_I1.fastq.gz", "./info/example3_1_R1.fastq.gz", "./info/example3_1_R2.fastq.gz"
+        ])
     ];
-    
+
     // Open the file
     let file = File::open(path).expect("Unable to open file");
     // Create a buffered reader for efficient reading
@@ -218,21 +233,35 @@ fn test_sample_collection_sample_lines() {
         if index == 0 {
             continue;
         }
-        // Check that the line contains exactly four parts (Sample_Lane, R1, R2, I1)
-        assert_eq!(parts.len(), 4, "Line does not have exactly four columns");
 
-        // Extract Sample_Lane, R1, R2, and I1
-        let sample_lane = parts[0].trim();
-        let r1 = parts[1].trim();
-        let r2 = parts[2].trim();
-        let i1 = parts[3].trim();
+        // Check that the line has at least one sample column (adjust this if necessary)
+        assert!(parts.len() >= 2, "Line does not have enough columns");
 
-        // Check if the values match the expected ones
-        let expected = &expected_contents[index - 1];
-        assert_eq!(sample_lane, expected.0, "Sample lane mismatch at line {}", index);
-        assert_eq!(r1, expected.1, "R1 mismatch at line {}", index);
-        assert_eq!(r2, expected.2, "R2 mismatch at line {}", index);
-        assert_eq!(i1, expected.3, "I1 mismatch at line {}", index);
+        // Extract sample name
+        let sample_name = parts[0].trim();
+
+        // Get the actual filenames from the line (starting from index 1 onward)
+        let filenames: Vec<String> = parts[1..]
+            .iter()
+            .map(|&filename| filename.trim().to_string())
+            .collect();
+
+        // Find the expected filenames for the sample
+        let expected = expected_contents.iter().find(|(name, _)| name == &sample_name);
+
+        assert!(expected.is_some(), "Sample name {} not found in expected contents", sample_name);
+
+        let expected_files = expected.unwrap().1.clone();
+
+        // Sort both expected and actual filenames for a flexible comparison
+        let mut filenames = filenames.clone();
+        let mut expected_files = expected_files.clone();
+
+        filenames.sort();
+        expected_files.sort();
+
+        // Compare filenames (R1, R2, I1)
+        assert_eq!(filenames, expected_files, "File mismatch for sample {}", sample_name);
     }
 }
 
@@ -243,11 +272,18 @@ fn test_sample_collection_sample_lines_basename() {
 
     // Expected values based on your sample file content
     let expected_contents = vec![
-        ("example1", "example1_S1_L001_R1.fastq.gz", "example1_S1_L001_R2.fastq.gz", "example1_S1_L001_I1.fastq.gz"),
-        ("example2", "example2_L001_R1.fastq.gz", "example2_L001_R2.fastq.gz", "MISSING_I1"),
-        ("example3_1", "example3_1_R1.fastq.gz", "example3_1_R2.fastq.gz", "example3_1_I1.fastq.gz")
+        ("example1", vec![
+            "example1_S1_L001_I1.fastq.gz", "example1_S1_L001_R1.fastq.gz", "example1_S1_L001_R2.fastq.gz",
+            "example1_S2_L001_I1.fastq.gz", "example1_S2_L001_R1.fastq.gz", "example1_S2_L001_R2.fastq.gz"
+        ]),
+        ("example2", vec![
+            "example2_L001_R1.fastq.gz", "example2_L001_R2.fastq.gz"
+        ]),
+        ("example3_1", vec![
+            "example3_1_I1.fastq.gz", "example3_1_R1.fastq.gz", "example3_1_R2.fastq.gz"
+        ])
     ];
-    
+
     // Open the file
     let file = File::open(path).expect("Unable to open file");
     // Create a buffered reader for efficient reading
@@ -262,20 +298,34 @@ fn test_sample_collection_sample_lines_basename() {
         if index == 0 {
             continue;
         }
-        // Check that the line contains exactly four parts (Sample_Lane, R1, R2, I1)
-        assert_eq!(parts.len(), 4, "Line does not have exactly four columns");
 
-        // Extract Sample_Lane, R1, R2, and I1
-        let sample_lane = parts[0].trim();
-        let r1 = parts[1].trim();
-        let r2 = parts[2].trim();
-        let i1 = parts[3].trim();
+        // Check that the line has at least one sample column (adjust this if necessary)
+        assert!(parts.len() >= 2, "Line does not have enough columns");
 
-        // Check if the values match the expected ones
-        let expected = &expected_contents[index - 1];
-        assert_eq!(sample_lane, expected.0, "Sample lane mismatch at line {}", index);
-        assert_eq!(r1, expected.1, "R1 mismatch at line {}", index);
-        assert_eq!(r2, expected.2, "R2 mismatch at line {}", index);
-        assert_eq!(i1, expected.3, "I1 mismatch at line {}", index);
+        // Extract sample name
+        let sample_name = parts[0].trim();
+
+        // Get the actual filenames from the line (starting from index 1 onward)
+        let filenames: Vec<String> = parts[1..]
+            .iter()
+            .map(|&filename| filename.trim().to_string())
+            .collect();
+
+        // Find the expected filenames for the sample
+        let expected = expected_contents.iter().find(|(name, _)| name == &sample_name);
+
+        assert!(expected.is_some(), "Sample name {} not found in expected contents", sample_name);
+
+        let expected_files = expected.unwrap().1.clone();
+
+        // Sort both expected and actual filenames for a flexible comparison
+        let mut filenames = filenames.clone();
+        let mut expected_files = expected_files.clone();
+
+        filenames.sort();
+        expected_files.sort();
+
+        // Compare filenames (R1, R2, I1)
+        assert_eq!(filenames, expected_files, "File mismatch for sample {}", sample_name);
     }
 }
