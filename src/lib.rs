@@ -48,61 +48,96 @@ pub fn parse_filename_split(file_path: &str) -> Option<(String, String)> {
 pub fn write_sample_files(path: &str, data: &HashMap<String, HashMap<String, String>>) {
     let mut file = File::create(path).expect("Could not create sample file");
     writeln!(file, "Sample_Lane\tR1\tR2\tI1").unwrap();
-    for (sample_lane, reads) in data {
-        writeln!(file, "{}\t{}\t{}\t{}", 
-                 sample_lane,
-                 reads.get("R1").unwrap_or(&"MISSING_R1".to_string()),
-                 reads.get("R2").unwrap_or(&"MISSING_R2".to_string()),
-                 reads.get("I1").unwrap_or(&"MISSING_I1".to_string())
-        ).unwrap();
+    // Sort the keys of the outer HashMap (sample_lane)
+    let mut sorted_keys: Vec<String> = data.keys().cloned().collect();
+    sorted_keys.sort();
+
+    // Iterate through the sorted keys and write the corresponding data
+    for sample_lane in sorted_keys {
+        if let Some(reads) = data.get(&sample_lane) {
+            writeln!(file, "{}\t{}\t{}\t{}", 
+                     sample_lane,
+                     reads.get("R1").unwrap_or(&"MISSING_R1".to_string()),
+                     reads.get("R2").unwrap_or(&"MISSING_R2".to_string()),
+                     reads.get("I1").unwrap_or(&"MISSING_I1".to_string())
+            ).unwrap();
+        }
     }
 }
 
 // Helper function to extract the basename
 pub fn extract_basename(file_path: Option<&String>) -> Option<String> {
     file_path
-        .and_then(|path| Path::new(path).file_name())
-        .and_then(|name| name.to_str().map(|s| s.to_string()))
+        .and_then(|path| Path::new(path).file_name()) // Extract the file name
+        .and_then(|name| name.to_str())               // Convert OsStr to &str
+        .map(|s| s.to_string())                       // Convert &str to String
 }
 
 pub fn write_sample_files_basename(path: &str, data: &HashMap<String, HashMap<String, String>>) {
     let mut file = File::create(path).expect("Could not create sample file");
     writeln!(file, "Sample_Lane\tR1\tR2\tI1").unwrap();
     
-    for (sample_lane, reads) in data {
-        writeln!(file, "{}\t{}\t{}\t{}", 
-                 sample_lane,
-                 extract_basename(reads.get("R1")).unwrap_or("MISSING_R1".to_string()),
-                 extract_basename(reads.get("R2")).unwrap_or("MISSING_R2".to_string()),
-                 extract_basename(reads.get("I1")).unwrap_or("MISSING_I1".to_string())
-        ).unwrap();
-    }
-}
+    // Sort the keys of the outer HashMap (sample_lane)
+    let mut sorted_keys: Vec<String> = data.keys().cloned().collect();
+    sorted_keys.sort();
 
-pub fn write_md5_files(path: &str, data: &HashMap<String, HashMap<String, String>>) {
-    let mut file = File::create(path).expect("Could not create md5 file");
-    writeln!(file, "file_name\tmd5sum").unwrap();
-    for reads in data.values() {
-        for file_path in reads.values() {
-            let md5sum = get_md5sum(file_path);
-            writeln!(file, "{}\t{}", file_path, md5sum).unwrap();
+    // Iterate through the sorted keys and write the corresponding data
+    for sample_lane in sorted_keys {
+        if let Some(reads) = data.get(&sample_lane) {
+            writeln!(file, "{}\t{}\t{}\t{}", 
+                sample_lane,
+                extract_basename(reads.get("R1")).unwrap_or("MISSING_R1".to_string()),
+                extract_basename(reads.get("R2")).unwrap_or("MISSING_R2".to_string()),
+                extract_basename(reads.get("I1")).unwrap_or("MISSING_I1".to_string())
+            ).unwrap();
         }
     }
 }
 
-pub fn write_md5_files_basename(path: &str, data: &HashMap<String, HashMap<String, String>>) {
+pub fn generate_md5_file_data(data: &HashMap<String, HashMap<String, String>>) -> Vec<(String, String)> {
+    // Collect all (basename, md5sum) tuples in sorted order in one step
+    let mut all_files: Vec<(String, String)> = data
+        .values()  // Iterating over values (inner HashMap)
+        .flat_map(|reads| {
+            // Sort file paths directly here
+            let mut sorted_file_paths: Vec<String> = reads.values().cloned().collect();
+            sorted_file_paths.sort(); // Sort the file paths lexicographically
+            sorted_file_paths.into_iter() // Convert the sorted file paths into an iterator
+                .filter_map(|file_path| {
+                    // For each file path, extract the basename and calculate the MD5sum
+                       Some((file_path.clone(), get_md5sum(&file_path)))
+                })
+        })
+        .collect();
+
+    // Sort all the (basename, md5sum) tuples by md5sum
+    all_files.sort_by(|a, b| a.0.cmp(&b.0)); // Sort by md5sum (tuple.0)
+
+    all_files // Return the sorted (basename, md5sum) vector
+}
+
+pub fn write_md5_files(path: &str, data: &Vec::<(String, String)> )-> io::Result<()> {
+    let mut file = File::create(path)?;
+    writeln!(file, "file_name\tmd5sum").unwrap();
+
+    // Iterate through the sorted keys and write the corresponding data
+    for (file_path, md5sum) in data {
+        writeln!(file, "{}\t{}", file_path, md5sum).unwrap();
+    }
+    Ok(())
+}
+
+pub fn write_md5_files_basename(path: &str, data: &Vec::<(String, String)> ) -> io::Result<()> {
     let mut file = File::create(path).expect("Could not create md5 file");
     writeln!(file, "file_name\tmd5sum").unwrap();
-    
-    for reads in data.values() {
-        for file_path in reads.values() {
-            if let Some( basename ) = extract_basename( Some(file_path) ) {
-                let md5sum = get_md5sum(file_path); // Assuming this is a function you have to calculate MD5sum
-                writeln!(file, "{}\t{}", basename, md5sum).unwrap();
-            }
-        }
+
+    // Iterate through the sorted keys and write the corresponding data
+    for (file_path, md5sum) in data {
+        writeln!(file, "{}\t{}", extract_basename(Some(&file_path)).unwrap(), md5sum).unwrap();
     }
+    Ok(())
 }
+
 
 
 pub fn compute_file_md5_incremental( file_path:&str ) -> io::Result<String> {

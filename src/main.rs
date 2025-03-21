@@ -11,11 +11,11 @@ fn main() {
     
     let path_sanitized = path_to_search.replace(|c: char| c.is_whitespace() || c == '/' || c == '\\', "_");
     
-    let sample_file_path = format!("{}/sample_collection_{}.sample_lines.tsv", path_sanitized, sampleid);
-    let files_file_path = format!("{}/sample_collection_{}.files_md5sum_lines.tsv", path_sanitized, sampleid);
+    let sample_file_path = format!("{}/sample_collection_sample_lines.tsv", path_sanitized);
+    let files_file_path = format!("{}/sample_collection_files_md5sum_lines.tsv", path_sanitized);
     
-    let sample_file_path_basename = format!("{}/sample_collection_basename_{}.sample_lines.tsv", path_sanitized, sampleid);
-    let files_file_path_basename = format!("{}/sample_collection_basename_{}.files_md5sum_lines.tsv", path_sanitized, sampleid);
+    let sample_file_path_basename = format!("{}/sample_collection_basename_sample_lines.tsv", path_sanitized);
+    let files_file_path_basename = format!("{}/sample_collection_basename_files_md5sum_lines.tsv", path_sanitized);
 
     let mut data: HashMap<String, HashMap<String, String>> = HashMap::new();
     
@@ -36,11 +36,11 @@ fn main() {
             }
         }
     }
-    
+    let md5data = generate_md5_file_data( &data );
     write_sample_files(&sample_file_path, &data);
-    write_md5_files(&files_file_path, &data);
-    write_sample_files(&sample_file_path_basename, &data);
-    write_md5_files(&files_file_path_basename, &data);
+    write_md5_files(&files_file_path, &md5data);
+    write_sample_files_basename(&sample_file_path_basename, &data);
+    write_md5_files_basename(&files_file_path_basename, &md5data);
     println!("Data written to '{}', '{}', '{}' and '{}'", 
         &sample_file_path,
         &files_file_path, 

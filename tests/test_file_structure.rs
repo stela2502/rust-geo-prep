@@ -10,10 +10,27 @@ fn create_fastq_file(path: &Path, content: &str) {
         .expect("Unable to write data to file");
 }
 
+
+#[test]
+fn test_extract_basename_valid_file() {
+    // Test with a valid file path
+    let file_path = "/tests/data/info/example1_R1.fastq.gz".to_string();
+    let result = extract_basename(Some(&file_path));
+    assert_eq!(result, Some("example1_R1.fastq.gz".to_string()));
+}
+
+#[test]
+fn test_extract_basename_valid_file2() {
+    // Test with a valid file path
+    let file_path = "tests/data/info/example1_R1.fastq.gz".to_string();
+    let result = extract_basename(Some(&file_path));
+    assert_eq!(result, Some("example1_R1.fastq.gz".to_string()));
+}
+
 #[test]
 fn create_and_check_fastq_files() {
     // Define the path to the `data` directory
-    let data_dir = Path::new("tests/data");
+    let data_dir = Path::new("tests/data/info/");
 
     // Check if the data directory exists, create it if not
     if !data_dir.exists() {
@@ -36,10 +53,10 @@ fn create_and_check_fastq_files() {
     for (file_name, content) in &files_and_contents {
         let file_path = data_dir.join(file_name);
         if !file_path.exists() {
-            println!("Creating file: {}", file_name);  // Optional: For debugging
+            //println!("Creating file: {}", file_name);  // Optional: For debugging
             create_fastq_file(&file_path, content);
         } else {
-            println!("File {} already exists", file_name);  // Optional: For debugging
+            //println!("File {} already exists", file_name);  // Optional: For debugging
         }
     }
 
@@ -48,6 +65,7 @@ fn create_and_check_fastq_files() {
         let file_path = data_dir.join(file_name);
         assert!(file_path.exists(), "File {} does not exist", file_name);
     }
+
 }
 
 #[cfg(test)]
