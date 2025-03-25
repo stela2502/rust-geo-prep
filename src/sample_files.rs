@@ -60,7 +60,7 @@ impl SampleFiles {
             match self.get_files_by_sample( sample ){
                 Some(files) => {
                     let entry = files.into_iter()
-                        .map(|(fname ,_) | self.extract_basename(Some(&fname)).unwrap() )
+                        .map(|(fname ,_) | self.extract_basename( &fname ).unwrap() )
                         .collect::<Vec<_>>()
                         .join("\t");
                     writeln!(file, "{}\t{}", sample, entry ).unwrap();
@@ -87,7 +87,7 @@ impl SampleFiles {
 
         // Iterate through the sorted keys and write the corresponding data
         for (file_path, md5sum) in self.get_files(None) {
-            writeln!(file, "{}\t{}", self.extract_basename(Some(&file_path)).unwrap(), md5sum).unwrap();
+            writeln!(file, "{}\t{}", self.extract_basename( &file_path ).unwrap(), md5sum).unwrap();
         }
         Ok(())
     }
@@ -95,6 +95,13 @@ impl SampleFiles {
     // Add a file with its sample name and technicalities
     pub fn add_file(&mut self, file_path: &str ) {
         // Add the file to the main filenames vector
+        if let Some(basename) = self.extract_basename( file_path ) {
+            if basename.starts_with("Undetermined") || basename.starts_with("Unmapped") || basename.starts_with("Umapped")  {
+                // igonore that crap
+                return
+            }
+        }
+
         let index = self.filenames.len();
         let md5sum = self.get_md5sum( file_path );
         self.filenames.push((file_path.to_string(), md5sum) );
@@ -124,7 +131,11 @@ impl SampleFiles {
         let mut read_type = None;
 
         for part in &parts {
-            if part.starts_with('S') && part.len() > 1 && part[1..].chars().all(|c| c.is_digit(10) ) {
+            if sample_parts.is_empty() {
+                // some less clever sample names might be S1 S2 S345223
+                sample_parts.push(part.to_string());
+            }
+            else if part.starts_with('S') && part.len() > 1 && part[1..].chars().all(|c| c.is_digit(10) ) {
                 // Skip over "S" and "L" parts, which are lane-related
                 tech.push( part.to_string() );
                 //println!("Skipping {}", part);
@@ -184,9 +195,8 @@ impl SampleFiles {
     }
 
     // Helper function to extract the basename
-    fn extract_basename(&self, file_path: Option<&String>) -> Option<String> {
-        file_path
-            .and_then(|path| Path::new(path).file_name()) // Extract the file name
+    fn extract_basename(&self, file_path: &str ) -> Option<String> {
+        Path::new(file_path).file_name() // Extract the file name
             .and_then(|name| name.to_str())               // Convert OsStr to &str
             .map(|s| s.to_string())                       // Convert &str to String
     }
