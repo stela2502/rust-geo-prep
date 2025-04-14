@@ -123,6 +123,11 @@ impl SampleFiles {
 
     fn parse_filename_split(&self, file_path: &str) -> Option<(String, String, String)> {
         // Split the path into parts based on '/' and then split by '_'
+
+        if let Some(ret) = self.parse_matrix_triplets( file_path ){
+            return Some(ret);
+        }
+
         let parts: Vec<&str> = file_path.split('/').last()?.split('_').collect();
 
         // Find the index of "S" and "L" if present
@@ -167,7 +172,24 @@ impl SampleFiles {
         }
     }
 
-    // Retrieve filenames by sample name, sorted by filename lexicographically
+    /// fix the barcodes.tsv.gz, features.tsv.gz and matrix.mtx.gz files
+    fn parse_matrix_triplets(&self, file_path: &str) -> Option<(String, String, String)> {
+        let suffixes = [
+            ("barcodes.tsv.gz", "barcodes", "tsv"),
+            ("features.tsv.gz", "features", "tsv"),
+            ("matrix.mtx.gz",   "matrix",   "mtx"),
+        ];
+
+        for (suffix, kind, ext) in suffixes {
+            if let Some(stripped) = file_path.strip_suffix(suffix) {
+                return Some((stripped.to_string(), kind.to_string(), ext.to_string()));
+            }
+        }
+
+        None
+    }
+
+    /// Retrieve filenames by sample name, sorted by filename lexicographically
     fn get_files(&self, ids: Option<&Vec<usize>> ) -> Vec<(String, String)> {
         let mut sorted_files = match ids {
             Some(id_s ) => id_s.into_iter().map(|id| self.filenames[*id].clone()).collect(),
