@@ -1,6 +1,4 @@
 
-use std::env;
-use std::collections::HashMap;
 use walkdir::WalkDir;
 use clap::Parser;
 
