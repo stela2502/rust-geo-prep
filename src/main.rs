@@ -55,9 +55,9 @@ fn main() {
     }
 
     data.write_sample_files(&sample_file_path);
-    data.write_md5_files(&files_file_path);
+    let _ = data.write_md5_files(&files_file_path);
     data.write_sample_files_basename(&sample_file_path_basename);
-    data.write_md5_files_basename(&files_file_path_basename);
+    let _ = data.write_md5_files_basename(&files_file_path_basename);
 
     println!("Data written to '{}', '{}', '{}' and '{}'", 
         &sample_file_path,
