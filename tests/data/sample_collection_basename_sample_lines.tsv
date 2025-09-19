@@ -1,0 +1,4 @@
+Sample_Lane	R1	R2	I1
+example1	example1_S1_L001_I1.fastq.gz	example1_S1_L001_R1.fastq.gz	example1_S1_L001_R2.fastq.gz	example1_S2_L001_I1.fastq.gz	example1_S2_L001_R1.fastq.gz	example1_S2_L001_R2.fastq.gz
+example2	example2_L001_R1.fastq.gz	example2_L001_R2.fastq.gz
+example3_1	example3_1_I1.fastq.gz	example3_1_R1.fastq.gz	example3_1_R2.fastq.gz
