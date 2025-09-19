@@ -1,3 +1,4 @@
+[![Rust](https://github.com/stela2502/rust-geo-prep/actions/workflows/rust.yml/badge.svg)](https://github.com/stela2502/rust-geo-prep/actions/workflows/rust.yml)
 # rust-geo-prep
 
 The tool is designed to create two types of reference tables for a GEO submission. The initial project for this was a multi-year, multi-sample 10x-based single-cell experiment with a large number of FASTQ files.
