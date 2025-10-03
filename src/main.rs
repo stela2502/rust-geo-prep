@@ -31,7 +31,7 @@ fn main() {
     for entry in WalkDir::new( "." ).into_iter().filter_map(Result::ok) {
         let file_path = entry.path();
         if let Some(file_name) = file_path.file_name().and_then(|n| n.to_str()) {
-            if file_name.ends_with(".fastq.gz") {
+            if file_name.ends_with(".fastq.gz") || file_name.ends_with(".fq.gz") {
                 let path_str = file_path.to_string_lossy();
                 data.add_file( &path_str );
             }
