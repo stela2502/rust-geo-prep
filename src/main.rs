@@ -3,6 +3,7 @@ use walkdir::WalkDir;
 use clap::Parser;
 
 use std::collections::HashSet;
+#[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
 
 use rust_geo_prep::sample_files::SampleFiles;
@@ -20,6 +21,19 @@ struct Opts {
     /// Omit md5sums (default calculate all)
     #[clap(short, long )]
     omit_md5: bool,
+
+    /// File suffixes treated as target files
+    ///
+    /// Can be specified multiple times:
+    ///   --suffix .fastq.gz --suffix .fq.gz
+    #[clap(
+        short = 's',
+        long = "suffix",
+        multiple_occurrences = true,
+        default_values = &[".fastq.gz", ".fq.gz"]
+    )]
+    suffixes: Vec<String>,
+
 }
 
 fn main(){
@@ -35,7 +49,12 @@ fn main(){
     let mut data = SampleFiles::new( opts.omit_md5 );
     let mut id= 0;
     
+    #[cfg(unix)]
     let mut visited: HashSet<(u64, u64)> = HashSet::new();
+
+    #[cfg(not(unix))]
+    let mut visited: std::collections::HashSet<std::path::PathBuf> = HashSet::new();
+
     let mut visited_files: HashSet<String> = HashSet::new();
 
     // Parse files and group by sample name, technicalities, and read type
@@ -43,8 +62,19 @@ fn main(){
         let file_path = entry.path();
         // Only directories need loop protection
         if let Ok(md) = file_path.metadata() {
+
             if md.is_dir() {
+                #[cfg(unix)]
                 let key = (md.dev(), md.ino());
+
+                #[cfg(not(unix))]
+                let key = {
+                    // Windows fallback: canonicalized path
+                    use std::path::PathBuf;
+                    std::fs::canonicalize(&file_path)
+                        .unwrap_or_else(|_| PathBuf::from(file_path))
+                };
+
 
                 if !visited.insert(key) {
                     // Already seen → skip this directory entirely
@@ -55,7 +85,7 @@ fn main(){
         }
         if let Some(file_name) = file_path.file_name().and_then(|n| n.to_str()) {
             id +=1;
-            if file_name.ends_with(".fastq.gz") || file_name.ends_with(".fq.gz") {
+            if opts.suffixes.iter().any(|s| file_name.ends_with(s)) {
                 let fname = match std::fs::canonicalize(file_path) {
                     Ok(real) => real.to_string_lossy().to_string() ,
                     Err(e) => {
