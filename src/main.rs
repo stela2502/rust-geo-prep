@@ -34,6 +34,11 @@ struct Opts {
     )]
     suffixes: Vec<String>,
 
+    /// Allow collecting files with identical basenames in different directories
+    /// (required for 10x matrix / features / barcodes layouts)
+    #[clap(short, long )]
+    allow_duplicates: bool,
+
 }
 
 fn main(){
@@ -94,9 +99,16 @@ fn main(){
                         file_path.to_string_lossy().to_string()
                     }
                 };
-                if visited_files.insert( file_name.to_string() ){
+                let key = if opts.allow_duplicates {
+                    fname.to_string()
+                }else {
+                    file_name.to_string()
+                };
+                if visited_files.insert( key.clone() ){
                     data.add_file(&fname);
                 }
+                
+                
             }
         }
     }
