@@ -1,4 +1,4 @@
 Sample_Lane	R1	R2	I1
-example1	./info/example1_S1_L001_I1.fastq.gz	./info/example1_S1_L001_R1.fastq.gz	./info/example1_S1_L001_R2.fastq.gz	./info/example1_S2_L001_I1.fastq.gz	./info/example1_S2_L001_R1.fastq.gz	./info/example1_S2_L001_R2.fastq.gz
-example2	./info/example2_L001_R1.fastq.gz	./info/example2_L001_R2.fastq.gz
-example3_1	./info/example3_1_I1.fastq.gz	./info/example3_1_R1.fastq.gz	./info/example3_1_R2.fastq.gz
+example1	/home/med-sal/git_Projects/rust-geo-prep/tests/data/info/example1_S1_L001_I1.fastq.gz	/home/med-sal/git_Projects/rust-geo-prep/tests/data/info/example1_S1_L001_R1.fastq.gz	/home/med-sal/git_Projects/rust-geo-prep/tests/data/info/example1_S1_L001_R2.fastq.gz	/home/med-sal/git_Projects/rust-geo-prep/tests/data/info/example1_S2_L001_I1.fastq.gz	/home/med-sal/git_Projects/rust-geo-prep/tests/data/info/example1_S2_L001_R1.fastq.gz	/home/med-sal/git_Projects/rust-geo-prep/tests/data/info/example1_S2_L001_R2.fastq.gz
+example2	/home/med-sal/git_Projects/rust-geo-prep/tests/data/info/example2_L001_R1.fastq.gz	/home/med-sal/git_Projects/rust-geo-prep/tests/data/info/example2_L001_R2.fastq.gz
+example3	/home/med-sal/git_Projects/rust-geo-prep/tests/data/info/example3_1_I1.fastq.gz	/home/med-sal/git_Projects/rust-geo-prep/tests/data/info/example3_1_R1.fastq.gz	/home/med-sal/git_Projects/rust-geo-prep/tests/data/info/example3_1_R2.fastq.gz

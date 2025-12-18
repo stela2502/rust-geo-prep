@@ -6,19 +6,26 @@ use std::path::Path;
 
 #[derive(Debug)]
 pub struct SampleFiles {
+    pub omit_md5: bool,
     filenames: Vec<(String, String)>,  // A single vector of (filenames, md5sums)
     filenames_by_sample: HashMap<String, Vec<usize>>,  // Maps sample_name -> list of indices into `filenames`
     filenames_by_sample_tech: HashMap<(String, String), Vec<usize>>,  // Maps (sample_name, technicalities) -> list of indices into `filenames`
 }
 
 impl SampleFiles {
-    pub fn new() -> Self {
+    pub fn new( omit_md5:bool ) -> Self {
         SampleFiles {
+            omit_md5,
             filenames: Vec::new(),
             filenames_by_sample: HashMap::new(),
             filenames_by_sample_tech: HashMap::new(),
         }
     }
+
+    pub fn len(&self) -> usize{
+        self.filenames.len()
+    }
+
 
     fn samples(&self) -> Vec<&String> {
         let mut sample_keys: Vec<&String> = self.filenames_by_sample.keys().collect();
@@ -122,6 +129,54 @@ impl SampleFiles {
     }
 
     fn parse_filename_split(&self, file_path: &str) -> Option<(String, String, String)> {
+        // First, try the matrix triplets parser
+        if let Some(ret) = self.parse_matrix_triplets(file_path) {
+            return Some(ret);
+        }
+
+        // Strip directories
+        let file_name = file_path.split('/').last()?;
+        // Strip extension
+        let file_name = file_name.strip_suffix(".fastq.gz")
+            .or_else(|| file_name.strip_suffix(".fq.gz"))
+            .unwrap_or(file_name);
+
+        // Split by underscores
+        let parts: Vec<&str> = file_name.split('_').collect();
+
+        if parts.is_empty() {
+            return None;
+        }
+
+        let mut sample_parts = Vec::new();
+        let mut tech_parts = Vec::new();
+        let mut read_type = None;
+
+        for part in parts {
+            // Detect read type: R1/R2/I1 or just 1/2 at the end
+            if part.starts_with("R1") || part.starts_with("R2") || part.starts_with("I1") {
+                read_type = Some(part[0..2].to_string());
+                break;
+            } else if part == "1" || part == "2" {
+                read_type = Some(format!("R{}", part));
+                break;
+            } else if part.starts_with('S') && part[1..].chars().all(|c| c.is_digit(10)) {
+                tech_parts.push(part.to_string());
+            } else if part.starts_with('L') && part[1..].chars().all(|c| c.is_digit(10)) {
+                tech_parts.push(part.to_string());
+            } else {
+                sample_parts.push(part.to_string());
+            }
+        }
+
+        read_type.map(|read| {
+            let sample_name = sample_parts.join("_");
+            let technicalities = tech_parts.join("_");
+            (sample_name, technicalities, read)
+        })
+    }
+    /*
+    fn parse_filename_split(&self, file_path: &str) -> Option<(String, String, String)> {
         // Split the path into parts based on '/' and then split by '_'
 
         if let Some(ret) = self.parse_matrix_triplets( file_path ){
@@ -170,7 +225,7 @@ impl SampleFiles {
         } else {
             None // In case there's no read type found
         }
-    }
+    }*/
 
     /// fix the barcodes.tsv.gz, features.tsv.gz and matrix.mtx.gz files
     fn parse_matrix_triplets(&self, file_path: &str) -> Option<(String, String, String)> {
@@ -224,6 +279,9 @@ impl SampleFiles {
     }
 
     fn compute_file_md5_incremental( &self, file_path:&str ) -> io::Result<String> {
+        if self.omit_md5 {
+            return Ok("omitted".to_string());
+        }
         // Run the md5sum command
         let output = Command::new("md5sum")
             .arg(file_path)

@@ -113,19 +113,23 @@ fn sample_collection_files_md5sum_lines() {
     let reader = BufReader::new(file);
 
     // Expected values based on your sample file content
-    let expected_contents = vec![
-        ("./info/example1_S1_L001_I1.fastq.gz", "1da0250da36f7f38d11f4f08397e02d9"),
-        ("./info/example1_S1_L001_R1.fastq.gz", "220693693f35b15196bc2f2fa8238e7b"),
-        ("./info/example1_S1_L001_R2.fastq.gz", "28f6a6cefb6b7ea07049b8261c52cab8"),
-        ("./info/example1_S2_L001_I1.fastq.gz", "933471e0abaab240b18683bc2267f3bc"),
-        ("./info/example1_S2_L001_R1.fastq.gz", "867171df270ed55ca348daf1369f5c25"),
-        ("./info/example1_S2_L001_R2.fastq.gz", "f60431ad04351b3eb786879ed18440c8"),
-        ("./info/example2_L001_R1.fastq.gz", "220693693f35b15196bc2f2fa8238e7b"),
-        ("./info/example2_L001_R2.fastq.gz", "28f6a6cefb6b7ea07049b8261c52cab8"),
-        ("./info/example3_1_I1.fastq.gz", "32a0a8c330f2cdcccafee94b03d1a04e"),
-        ("./info/example3_1_R1.fastq.gz", "220693693f35b15196bc2f2fa8238e7b"),
-        ("./info/example3_1_R2.fastq.gz", "28f6a6cefb6b7ea07049b8261c52cab8"),
-    ];
+    let expected_contents: Vec<(String, &str)> = vec![
+        ("tests/data/info/example1_S1_L001_I1.fastq.gz", "1da0250da36f7f38d11f4f08397e02d9"),
+        ("tests/data/info/example1_S1_L001_R1.fastq.gz", "220693693f35b15196bc2f2fa8238e7b"),
+        ("tests/data/info/example1_S1_L001_R2.fastq.gz", "28f6a6cefb6b7ea07049b8261c52cab8"),
+        ("tests/data/info/example1_S2_L001_I1.fastq.gz", "933471e0abaab240b18683bc2267f3bc"),
+        ("tests/data/info/example1_S2_L001_R1.fastq.gz", "867171df270ed55ca348daf1369f5c25"),
+        ("tests/data/info/example1_S2_L001_R2.fastq.gz", "f60431ad04351b3eb786879ed18440c8"),
+        ("tests/data/info/example2_L001_R1.fastq.gz", "220693693f35b15196bc2f2fa8238e7b"),
+        ("tests/data/info/example2_L001_R2.fastq.gz", "28f6a6cefb6b7ea07049b8261c52cab8"),
+        ("tests/data/info/example3_1_I1.fastq.gz", "32a0a8c330f2cdcccafee94b03d1a04e"),
+        ("tests/data/info/example3_1_R1.fastq.gz", "220693693f35b15196bc2f2fa8238e7b"),
+        ("tests/data/info/example3_1_R2.fastq.gz", "28f6a6cefb6b7ea07049b8261c52cab8"),
+    ].into_iter().map(|(rel, hash)| {
+        let abs = std::fs::canonicalize(rel).unwrap();   // SAME logic as tool
+        (abs.to_string_lossy().to_string(), hash)
+    })
+    .collect();
 
     // Iterate over each line in the file
     for (index, line) in reader.lines().enumerate() {
@@ -206,18 +210,38 @@ fn test_sample_collection_sample_lines() {
     let path = "tests/data/sample_collection_sample_lines.tsv";
 
     // Expected values based on your sample file content
-    let expected_contents = vec![
+    let expected_contents: Vec<(String, Vec<String>)> = vec![
         ("example1", vec![
-            "./info/example1_S1_L001_I1.fastq.gz", "./info/example1_S1_L001_R1.fastq.gz", "./info/example1_S1_L001_R2.fastq.gz",
-            "./info/example1_S2_L001_I1.fastq.gz", "./info/example1_S2_L001_R1.fastq.gz", "./info/example1_S2_L001_R2.fastq.gz"
+            "tests/data/info/example1_S1_L001_I1.fastq.gz", 
+            "tests/data/info/example1_S1_L001_R1.fastq.gz", 
+            "tests/data/info/example1_S1_L001_R2.fastq.gz",
+            "tests/data/info/example1_S2_L001_I1.fastq.gz", 
+            "tests/data/info/example1_S2_L001_R1.fastq.gz", 
+            "tests/data/info/example1_S2_L001_R2.fastq.gz"
         ]),
         ("example2", vec![
-            "./info/example2_L001_R1.fastq.gz", "./info/example2_L001_R2.fastq.gz"
+            "tests/data/info/example2_L001_R1.fastq.gz", 
+            "tests/data/info/example2_L001_R2.fastq.gz"
         ]),
-        ("example3_1", vec![
-            "./info/example3_1_I1.fastq.gz", "./info/example3_1_R1.fastq.gz", "./info/example3_1_R2.fastq.gz"
+        ("example3", vec![
+            "tests/data/info/example3_1_I1.fastq.gz", 
+            "tests/data/info/example3_1_R1.fastq.gz", 
+            "tests/data/info/example3_1_R2.fastq.gz"
         ])
-    ];
+    ].into_iter().map(|(sample, files)| {
+        let abs_files: Vec<String> = files
+            .into_iter()
+            .map(|rel| {
+                std::fs::canonicalize(rel)
+                    .unwrap_or_else(|_| panic!("Canonicalize failed for: {}", rel))
+                    .to_string_lossy()
+                    .to_string()
+            })
+            .collect();
+
+        (sample.to_string(), abs_files)
+    })
+    .collect();
 
     // Open the file
     let file = File::open(path).expect("Unable to open file");
@@ -279,7 +303,7 @@ fn test_sample_collection_sample_lines_basename() {
         ("example2", vec![
             "example2_L001_R1.fastq.gz", "example2_L001_R2.fastq.gz"
         ]),
-        ("example3_1", vec![
+        ("example3", vec![
             "example3_1_I1.fastq.gz", "example3_1_R1.fastq.gz", "example3_1_R2.fastq.gz"
         ])
     ];
