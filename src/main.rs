@@ -34,11 +34,51 @@ struct Opts {
     )]
     suffixes: Vec<String>,
 
+    /// File suffixes treated as target files
+    ///
+    /// Can be specified multiple times:
+    ///   --suffix .fastq.gz --suffix .fq.gz
+    #[clap(
+        short = 'e',
+        long = "exclude",
+        multiple_occurrences = true,
+    )]
+    exclude: Vec<String>,
+
     /// Allow collecting files with identical basenames in different directories
     /// (required for 10x matrix / features / barcodes layouts)
     #[clap(short, long )]
     allow_duplicates: bool,
 
+}
+
+fn is_excluded_path(p: &std::path::Path, excludes: &[String]) -> bool {
+    if excludes.is_empty() {
+        return false;
+    }
+
+    // Compare on a stable string form (works even if parts are non-utf8-ish: fallback lossy)
+    let p_str = p.to_string_lossy();
+
+    // Also check components to support excluding by folder name (e.g. "outs", "fastq_path")
+    for ex in excludes {
+        if ex.is_empty() {
+            continue;
+        }
+
+        // 1) Full substring match on the whole path (most flexible)
+        if p_str.contains(ex) {
+            return true;
+        }
+
+        // 2) Folder/component exact match (exclude by directory name)
+        if p.components()
+            .any(|c| c.as_os_str().to_string_lossy() == ex.as_str())
+        {
+            return true;
+        }
+    }
+    false
 }
 
 fn main(){
@@ -50,6 +90,8 @@ fn main(){
     let sample_file_path_basename = format!("{}_basename_sample_lines.tsv", opts.prefix);
     let files_file_path_basename = format!("{}_basename_files_md5sum_lines.tsv", opts.prefix);
 
+    println!("We are searching for files ending on either of these strings {:?}", opts.suffixes );
+
     
     let mut data = SampleFiles::new( opts.omit_md5 );
     let mut id= 0;
@@ -60,11 +102,15 @@ fn main(){
     #[cfg(not(unix))]
     let mut visited: std::collections::HashSet<std::path::PathBuf> = HashSet::new();
 
-    let mut visited_files: HashSet<String> = HashSet::new();
-
     // Parse files and group by sample name, technicalities, and read type
     for entry in WalkDir::new( "." ).follow_links(true).into_iter().filter_map(Result::ok) {
         let file_path = entry.path();
+
+        // --- exclude folders/files EARLY (before metadata/canonicalize) ---
+        if is_excluded_path(file_path, &opts.exclude) {
+            continue;
+        }
+
         // Only directories need loop protection
         if let Ok(md) = file_path.metadata() {
 
@@ -99,23 +145,16 @@ fn main(){
                         file_path.to_string_lossy().to_string()
                     }
                 };
-                let key = if opts.allow_duplicates {
-                    fname.to_string()
-                }else {
-                    file_name.to_string()
-                };
-                if visited_files.insert( key.clone() ){
-                    data.add_file(&fname);
-                }
-                
-                
+                // this now internally checks if the file is a duplicate!
+                // it also handles 10x triplets so that they become unique, too.
+                data.add_file(&fname);
             }
         }
     }
 
-    data.write_sample_files(&sample_file_path);
+    let _ = data.write_sample_files(&sample_file_path);
     let _ = data.write_md5_files(&files_file_path);
-    data.write_sample_files_basename(&sample_file_path_basename);
+    let _ = data.write_sample_files_basename(&sample_file_path_basename);
     let _ = data.write_md5_files_basename(&files_file_path_basename);
 
     println!("{}/{} files detected - data written to '{}', '{}', '{}' and '{}'", 

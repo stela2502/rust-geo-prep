@@ -1,5 +1,4 @@
-Sample_Lane	R1	R2	I1
-\\?\D:\UncommonUsers\StefanL\Documents\git\rust-geo-prep\tests\data\example1	example1_S1_L001_I1.fastq.gz	example1_S1_L001_R1.fastq.gz	example1_S1_L001_R2.fastq.gz
-\\?\D:\UncommonUsers\StefanL\Documents\git\rust-geo-prep\tests\data\example2	example2_L001_R1.fastq.gz	example2_L001_R2.fastq.gz
-\\?\D:\UncommonUsers\StefanL\Documents\git\rust-geo-prep\tests\data\example3	example3_1_I1.fastq.gz	example3_1_R1.fastq.gz	example3_1_R2.fastq.gz
-\\?\D:\UncommonUsers\StefanL\Documents\git\rust-geo-prep\tests\data\info\example1	example1_S2_L001_I1.fastq.gz	example1_S2_L001_R1.fastq.gz	example1_S2_L001_R2.fastq.gz
+Sample_Lane	TenX	H5	I1	R1	R2	I1	R1	R2
+example1			example1_S1_L001_I1.fastq.gz	example1_S1_L001_R1.fastq.gz	example1_S1_L001_R2.fastq.gz	example1_S2_L001_I1.fastq.gz	example1_S2_L001_R1.fastq.gz	example1_S2_L001_R2.fastq.gz
+example2				example2_L001_R1.fastq.gz	example2_L001_R2.fastq.gz			
+example3			example3_1_I1.fastq.gz	example3_1_R1.fastq.gz	example3_1_R2.fastq.gz			

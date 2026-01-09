@@ -1,304 +1,667 @@
-use std::collections::HashMap;
-use std::process::Command;
+use std::collections::{BTreeMap, HashSet};
 use std::fs::{self, File};
-use std::io::{self, BufRead, BufReader, Write};
-use std::path::Path;
+use std::io::{self, BufRead, BufReader};
+use std::io::BufWriter;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::io::Write;
+
+#[derive(Debug, Default)]
+pub struct LaneFastqs {
+    pub reads: BTreeMap<String, String>,
+}
+
+impl LaneFastqs {
+    /// Add a FASTQ for a lane under a specific role (R1/R2/I1/...)
+    pub fn add_read(&mut self, role: &str, path: String) {
+        if let Some(existing) = self.reads.get(role) {
+            eprintln!(
+                "Duplicate read role '{}' for lane: already have '{}', tried to add '{}' - file is ignored!",
+                role, existing, path
+            );
+        }else {
+           self.reads.insert(role.to_string(), path); 
+        }
+        
+    }
+
+    /// Render FASTQ cells for this lane in the provided `roles` order.
+    pub fn row_cells<F>(&self, roles: &[String], fmt: &F) -> Vec<String>
+    where
+        F: Fn(&str) -> String,
+    {
+        roles
+            .iter()
+            .map(|role| self.reads.get(role).map(|p| fmt(p)).unwrap_or_default())
+            .collect()
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct SampleRecord {
+    pub name: String,
+
+    /// 10x bundle (zip), optional
+    pub tenx: Option<String>,
+
+    /// h5 file, optional
+    pub h5_files: Option<String>,
+
+    /// FASTQ lanes grouped by lane key, each containing role→path (R1/R2/I1/...)
+    pub lanes: BTreeMap<String, LaneFastqs>,
+}
+
+impl SampleRecord {
+    /// Render a single flattened row for this sample: Sample + TenX + H5 + (lane blocks...)
+    pub fn row_cells<F>(&self, roles: &[String], fmt: &F, max_lanes: usize) -> Vec<String>
+    where
+        F: Fn(&str) -> String,
+    {
+        let mut out = Vec::new();
+
+        // first columns
+        out.push(self.name.clone());
+        out.push(self.tenx.as_ref().map(|p| fmt(p)).unwrap_or_default());
+        out.push(self.h5_files.as_ref().map(|p| fmt(p)).unwrap_or_default());
+
+        // lane blocks (sorted by key)
+        let mut lane_count = 0usize;
+        for (_lane_key, lane) in &self.lanes {
+            out.extend(lane.row_cells(roles, fmt));
+            lane_count += 1;
+        }
+
+        // pad missing lane blocks to max_lanes
+        let missing_lanes = max_lanes.saturating_sub(lane_count);
+        if missing_lanes > 0 {
+            out.extend(std::iter::repeat(String::new()).take(missing_lanes * roles.len()));
+        }
+
+        out
+    }
+
+    /// Number of lanes
+    pub fn len(&self) -> usize {
+        self.lanes.len()
+    }
+}
+
+#[derive(Debug, Clone)]
+enum ParsedKind {
+    TenX,
+    H5,
+    Fastq { lane: String, role: String },
+}
+
+#[derive(Debug, Clone)]
+struct ParsedFile {
+    sample: String,
+    kind: ParsedKind,
+    path: String, // authoritative path (possibly transformed, e.g. 10x zip)
+}
 
 #[derive(Debug)]
 pub struct SampleFiles {
     pub omit_md5: bool,
-    filenames: Vec<(String, String)>,  // A single vector of (filenames, md5sums)
-    filenames_by_sample: HashMap<String, Vec<usize>>,  // Maps sample_name -> list of indices into `filenames`
-    filenames_by_sample_tech: HashMap<(String, String), Vec<usize>>,  // Maps (sample_name, technicalities) -> list of indices into `filenames`
+    pub samples: BTreeMap<String, SampleRecord>,
+
+    processed_paths: HashSet<String>, // canonical paths AFTER parsing
+    roles: HashSet<String>,           // FASTQ roles seen: R1, R2, I1, ...
+
+    // kept for md5 reporting + deterministic lists
+    files: Vec<(String, String, String)>, // (path, label, md5)
 }
 
 impl SampleFiles {
-    pub fn new( omit_md5:bool ) -> Self {
+    /// Construct the container
+    pub fn new(omit_md5: bool) -> Self {
         SampleFiles {
             omit_md5,
-            filenames: Vec::new(),
-            filenames_by_sample: HashMap::new(),
-            filenames_by_sample_tech: HashMap::new(),
+            samples: BTreeMap::new(),
+            processed_paths: HashSet::new(),
+            roles: HashSet::new(),
+            files: Vec::new(),
         }
     }
 
-    pub fn len(&self) -> usize{
-        self.filenames.len()
+    /// Total number of recorded files (including 10x/h5/fastq)
+    pub fn len(&self) -> usize {
+        self.files.len()
     }
 
-
-    fn samples(&self) -> Vec<&String> {
-        let mut sample_keys: Vec<&String> = self.filenames_by_sample.keys().collect();
-        sample_keys.sort();
-        sample_keys
-
+    /// Write sample table (full paths)
+    pub fn write_sample_files(&self, path: &str) -> io::Result<()> {
+        self.write_sample_files_with(path, '\t', |p| p.to_string())
     }
 
+    /// Write sample table (basenames only)
+    pub fn write_sample_files_basename(&self, path: &str) -> io::Result<()> {
+        self.write_sample_files_with(path, '\t', |p| self.extract_basename(p).unwrap_or_else(|| p.to_string()))
+    }
 
-    pub fn write_sample_files(&self, path: &str) {
-        let mut file = match File::create(path){
-            Ok(f) => f,
-            Err(e) => {
-                panic!( "Could not create sample file {}:\n{}", path, e)
-            },
+    /// Internal sample-table writer
+    fn write_sample_files_with<F>(&self, path: &str, sep: char, fmt: F) -> io::Result<()>
+    where
+        F: Fn(&str) -> String,
+    {
+        let file = File::create(path)?;
+        let mut w = BufWriter::new(file);
+
+        // FASTQ roles columns
+        let mut roles: Vec<String> = self.roles.iter().cloned().collect();
+        roles.sort();
+
+        let max_lanes = self.samples.values().map(|s| s.len()).max().unwrap_or(0);
+
+        // header
+        write!(w, "Sample_Lane{sep}TenX{sep}H5")?;
+        for _block in 0..max_lanes {
+            for role in &roles {
+                write!(w, "{sep}{role}")?;
+            }
+        }
+        writeln!(w)?;
+
+        // rows (one per sample, flattened lane blocks)
+        for sample in self.samples.values() {
+            let row = sample.row_cells(&roles, &fmt, max_lanes);
+            writeln!(w, "{}", row.join(&sep.to_string()))?;
+        }
+
+        Ok(())
+    }
+
+    /// Full paths + md5
+    pub fn write_md5_files(&self, path: &str) -> io::Result<()> {
+        self.write_md5_files_with(path, |p| p.to_string())
+    }
+
+    /// Basename only + md5
+    pub fn write_md5_files_basename(&self, path: &str) -> io::Result<()> {
+        self.write_md5_files_with(path, |p| self.extract_basename(p).unwrap_or_else(|| p.to_string()))
+    }
+
+    /// Internal md5 writer
+    fn write_md5_files_with<F>(&self, path: &str, fmt: F) -> io::Result<()>
+    where
+        F: Fn(&str) -> String,
+    {
+        let file = File::create(path)?;
+        let mut w = BufWriter::new(file);
+
+        writeln!(w, "file_name\tmd5sum")?;
+
+        let mut entries = self.files.clone();
+        entries.sort_by(|a, b| a.0.cmp(&b.0));
+
+        for (file_path, _label, md5sum) in entries {
+            writeln!(w, "{}\t{}", fmt(&file_path), md5sum)?;
+        }
+
+        Ok(())
+    }
+
+    /// Reject public-repo downloaded / re-packed FASTQs (GEO/SRA/ENA/ArrayExpress-ish).
+    fn looks_like_public_repo_dump(&self, file_path: &str) -> bool {
+        let fname = match self.extract_basename(file_path) {
+            Some(b) => b,
+            None => return false,
         };
-        writeln!(file, "Sample_Lane\tR1\tR2\tI1").unwrap();
-        // Sort the keys of the outer HashMap (sample_lane)
+        let lower = fname.to_ascii_lowercase();
+        let path_lower = file_path.to_ascii_lowercase();
 
-        for sample in self.samples() {
-            match self.get_files_by_sample( sample ){
-                Some(files) => {
-                    let entry = files.into_iter()
-                        .map(|(fname ,_) | fname )
-                        .collect::<Vec<_>>()
-                        .join("\t");
-                    writeln!(file, "{}\t{}", sample, entry ).unwrap();
-                },
-                None =>{} ,
-            }
-        }
-    }
+        // GEO / SRA / ENA / DDBJ typical run accessions in filenames:
+        // SRR/ERR/DRR + digits, also sometimes SRX/ERX/DRX, GSM/GSE
+        let starts_with_run = |p: &str| {
+            let u = fname.as_bytes();
+            let pu = p.as_bytes();
+            if u.len() < pu.len() + 6 { return false; } // require some digits
+            if !fname.starts_with(p) { return false; }
+            fname[p.len()..].chars().take(12).any(|c| c.is_ascii_digit())
+        };
 
-    pub fn write_sample_files_basename(&self, path: &str ) {
-        let mut file = File::create(path).expect("Could not create sample file");
-        writeln!(file, "Sample_Lane\tR1\tR2\tI1").unwrap();
-
-        for sample in self.samples() {
-            match self.get_files_by_sample( sample ){
-                Some(files) => {
-                    let entry = files.into_iter()
-                        .map(|(fname ,_) | self.extract_basename( &fname ).unwrap() )
-                        .collect::<Vec<_>>()
-                        .join("\t");
-                    writeln!(file, "{}\t{}", sample, entry ).unwrap();
-                },
-                None =>{} ,
-            }
-        }
-    }
-
-    pub fn write_md5_files(&self, path: &str )-> io::Result<()> {
-        let mut file = File::create(path)?;
-        writeln!(file, "file_name\tmd5sum").unwrap();
-
-        // Iterate through the sorted keys and write the corresponding data
-        for (file_path, md5sum) in self.get_files(None) {
-            writeln!(file, "{}\t{}", file_path, md5sum).unwrap();
-        }
-        Ok(())
-    }
-
-    pub fn write_md5_files_basename(&self, path: &str ) -> io::Result<()> {
-        let mut file = File::create(path).expect("Could not create md5 file");
-        writeln!(file, "file_name\tmd5sum").unwrap();
-
-        // Iterate through the sorted keys and write the corresponding data
-        for (file_path, md5sum) in self.get_files(None) {
-            writeln!(file, "{}\t{}", self.extract_basename( &file_path ).unwrap(), md5sum).unwrap();
-        }
-        Ok(())
-    }
-
-    // Add a file with its sample name and technicalities
-    pub fn add_file(&mut self, file_path: &str ) {
-        // Add the file to the main filenames vector
-        if let Some(basename) = self.extract_basename( file_path ) {
-            if basename.starts_with("Undetermined") || basename.starts_with("Unmapped") || basename.starts_with("Umapped")  {
-                // igonore that crap
-                return
-            }
-        }
-
-        let index = self.filenames.len();
-        let md5sum = self.get_md5sum( file_path );
-        self.filenames.push((file_path.to_string(), md5sum) );
-        if let Some( (sample, technicalities, _read) ) = self.parse_filename_split( &file_path ){
-            // Add the index to the sample_name entry
-            self.filenames_by_sample.entry(sample.clone())
-                .or_insert_with(Vec::new)
-                .push(index);
-
-            // Add the index to the (sample_name, technicalities) entry
-            self.filenames_by_sample_tech.entry((sample, technicalities))
-                .or_insert_with(Vec::new)
-                .push(index);
+        // only care about fastqs
+        if !(lower.ends_with(".fastq.gz") || lower.ends_with(".fq.gz") || lower.ends_with(".fastq") || lower.ends_with(".fq")) {
+            return false;
         }
 
         
 
-    }
-
-    fn parse_filename_split(&self, file_path: &str) -> Option<(String, String, String)> {
-        // First, try the matrix triplets parser
-        if let Some(ret) = self.parse_matrix_triplets(file_path) {
-            return Some(ret);
+        if starts_with_run("SRR") || starts_with_run("ERR") || starts_with_run("DRR")
+            || starts_with_run("SRX") || starts_with_run("ERX") || starts_with_run("DRX")
+            || fname.starts_with("GSM") || fname.starts_with("GSE")
+        {
+            return true;
         }
 
-        // Strip directories
-        let file_name = file_path.split('/').last()?;
-        // Strip extension
-        let file_name = file_name.strip_suffix(".fastq.gz")
+        // Common “repacked from bam/sra” hints
+        if lower.contains(".bam.") || lower.contains("annotated") || lower.contains("sra") {
+            return true;
+        }
+
+        // Folder hints (GEO series / ArrayExpress / ENA style staging)
+        if path_lower.contains("/geo/") || path_lower.contains("/gse") || path_lower.contains("/gsm")
+            || path_lower.contains("/arrayexpress/") || path_lower.contains("/ena/") || path_lower.contains("/sra/")
+        {
+            return true;
+        }
+
+        false
+    }
+
+
+
+    /// Add a file into the NEW SampleFiles structure (samples → lanes → role→path; plus 10x/h5 on SampleRecord).
+    pub fn add_file(&mut self, file_path: &str) {
+        // Step 1: ignore junk FASTQs
+        if let Some(basename) = self.extract_basename(file_path) {
+            if basename.starts_with("Undetermined")
+                || basename.starts_with("Unmapped")
+                || basename.starts_with("Umapped")
+            {
+                return;
+            }
+        }
+
+        if self.looks_like_public_repo_dump( &file_path ){
+            eprintln!("Looks like public data - re-submitting is not a good idea and it will break the logics later on:\n{file_path}");
+            return;
+        }
+
+        // Step 2: parse filename (may transform path e.g. 10x → zip)
+        let parsed = match self.parse_file(file_path) {
+            Some(v) => v,
+            None => return,
+        };
+
+        // canonicalize the authoritative path (not the incoming one)
+        let canonical = match std::fs::canonicalize(&parsed.path) {
+            Ok(p) => p.to_string_lossy().to_string(),
+            Err(_) => parsed.path.clone(),
+        };
+
+        // Deduplicate after parsing
+        if !self.processed_paths.insert(canonical) {
+            return;
+        }
+
+        // Step 3: md5 of the authoritative file
+        let md5sum = self.get_md5sum(&parsed.path);
+
+        // Step 4: record file for md5 report
+        let label = match &parsed.kind {
+            ParsedKind::TenX => "10x".to_string(),
+            ParsedKind::H5 => "h5".to_string(),
+            ParsedKind::Fastq { lane, role } => format!("{lane}:{role}"),
+        };
+        eprintln!("I obtained a usable file: {}, {}, with {}", parsed.path, label, md5sum);
+        self.files.push((parsed.path.clone(), label, md5sum.clone()));
+
+        // Step 5: update NEW structure
+        let rec = self
+            .samples
+            .entry(parsed.sample.clone())
+            .or_insert_with(|| SampleRecord {
+                name: parsed.sample.clone(),
+                ..Default::default()
+            });
+
+        
+
+        match parsed.kind {
+            ParsedKind::TenX => {
+                if rec.tenx.is_some() {
+                    // keep "true to the idea": 10x is single bundle per sample
+                    panic!("Duplicate 10x bundle for sample '{}': \n{}\n{:?}", rec.name, parsed.path, rec.tenx);
+                }
+                rec.tenx = Some(parsed.path);
+            }
+            ParsedKind::H5 => {
+                if let Some(existing) = rec.h5_files.as_ref() {
+                    if existing == &parsed.path {
+                        return; // identical duplicate → ignore
+                    }
+                    eprintln!(
+                        "WARNING: Additional h5 for sample '{}': keeping first\n  keep: {}\n  skip: {}",
+                        rec.name, existing, parsed.path
+                    );
+                    return; // keep first (ignore all secondaries)
+                }
+                rec.h5_files = Some(parsed.path);
+            }
+            ParsedKind::Fastq { lane, role } => {
+                self.roles.insert(role.clone());
+                rec.lanes.entry(lane).or_default().add_read(&role, parsed.path);
+            }
+        }
+    }
+
+    /// Parse a path into (sample, kind, authoritative_path). Handles 10x triplets, h5, and FASTQs.
+    fn parse_file(&self, file_path: &str) -> Option<ParsedFile> {
+
+        if should_ignore_fastq_by_name(&file_path) {
+            eprintln!("WARNING: Ignoring FASTQ with non-Illumina naming: '{file_path}'");
+            return None
+        }
+
+        // 10x triplets → <sample>.10x.zip
+        if let Some((sample, _tag, zip_path)) = self.parse_matrix_triplets(file_path) {
+            return Some(ParsedFile {
+                sample,
+                kind: ParsedKind::TenX,
+                path: zip_path,
+            });
+        }
+
+        // h5
+        if file_path.ends_with(".h5") {
+            let sample = self.sample_from_parent_dir_or_stem(file_path)?;
+            let new_path = match self.materialize_prefixed_h5(file_path, &sample) {
+                Ok(p) => p,
+                Err(e) => {
+                    eprintln!(
+                        "WARNING: could not materialize prefixed h5 for {} ({e:?}); using original",
+                        file_path
+                    );
+                    file_path.to_string()
+                }
+            };
+            return Some(ParsedFile {
+                sample,
+                kind: ParsedKind::H5,
+                path: new_path.to_string(),
+            });
+        }
+
+        // FASTQs
+        self.parse_fastq(file_path)
+    }
+
+    /// Parse FASTQ names into sample + lane_key + role (R1/R2/I1) + original path.
+    fn parse_fastq(&self, file_path: &str) -> Option<ParsedFile> {
+        let file_name = Path::new(file_path).file_name()?.to_str()?.to_string();
+
+        if !file_name.ends_with(".fastq.gz") && ! file_name.ends_with(".fq.gz") {
+            return None
+        }
+        if should_ignore_fastq_by_name(&file_name) {
+            eprintln!("WARNING: Ignoring FASTQ with non-Illumina naming: '{file_name}'");
+            return None
+        }
+
+        let stem = file_name
+            .strip_suffix(".fastq.gz")
             .or_else(|| file_name.strip_suffix(".fq.gz"))
-            .unwrap_or(file_name);
+            .unwrap_or(&file_name);
 
-        // Split by underscores
-        let parts: Vec<&str> = file_name.split('_').collect();
-
+        let parts: Vec<&str> = stem.split('_').collect();
         if parts.is_empty() {
             return None;
         }
 
-        let mut sample_parts = Vec::new();
-        let mut tech_parts = Vec::new();
-        let mut read_type = None;
 
-        for part in parts {
-            // Detect read type: R1/R2/I1 or just 1/2 at the end
-            if part.starts_with("R1") || part.starts_with("R2") || part.starts_with("I1") {
-                read_type = Some(part[0..2].to_string());
+
+        // 1) Find the read role by scanning from the BACK
+        let mut role: Option<String> = None;
+        let mut stop_idx = parts.len();
+
+        for (i, p) in parts.iter().enumerate().rev() {
+            if *p == "R1" || *p == "R2" || *p == "I1" || *p == "I2" {
+                role = Some((*p).to_string());
+                stop_idx = i;
                 break;
-            } else if part == "1" || part == "2" {
-                read_type = Some(format!("R{}", part));
+            }
+            if p.starts_with('R') && p.len() > 1 && p[1..].chars().all(|c| c.is_ascii_digit()) {
+                role = Some((*p).to_string());
+                stop_idx = i;
                 break;
-            } else if part.starts_with('S') && part[1..].chars().all(|c| c.is_digit(10)) {
-                tech_parts.push(part.to_string());
-            } else if part.starts_with('L') && part[1..].chars().all(|c| c.is_digit(10)) {
-                tech_parts.push(part.to_string());
-            } else {
-                sample_parts.push(part.to_string());
+            }
+            if p.starts_with('I') && p.len() > 1 && p[1..].chars().all(|c| c.is_ascii_digit()) {
+                role = Some((*p).to_string());
+                stop_idx = i;
+                break;
+            }
+        }
+        // Fallback ONLY if the LAST token is numeric and no explicit role was found
+        if role.is_none() {
+            if let Some((i, last)) = parts.iter().enumerate().last() {
+                if *last == "1" {
+                    role = Some("R1".to_string());
+                    stop_idx = i;
+                } else if *last == "2" {
+                    role = Some("R2".to_string());
+                    stop_idx = i;
+                }
             }
         }
 
-        read_type.map(|read| {
-            let sample_name = sample_parts.join("_");
-            let technicalities = tech_parts.join("_");
-            (sample_name, technicalities, read)
+        // ❌ NO silent fallback anymore — missing role is a hard error
+        let role = match role {
+            Some(r) => r,
+            None => {
+                eprintln!(
+                "Could not determine read role (R1/R2/I1/I2) from FASTQ name: '{}' -> assuming single end and call it R1",
+                file_path
+                );
+                "R1".to_string()
+            },
+        };
+
+
+
+        let mut sample_parts: Vec<String> = Vec::new();
+        let mut s_part: Option<String> = None;
+        let mut l_part: Option<String> = None;
+
+        for p in &parts[..stop_idx] {
+            // lane-ish
+            if p.starts_with('S') && p.len() > 1 && p[1..].chars().all(|c| c.is_ascii_digit()) {
+                s_part = Some((*p).to_string());
+                continue;
+            }
+            if p.starts_with('L') && p.len() > 1 && p[1..].chars().all(|c| c.is_ascii_digit()) {
+                l_part = Some((*p).to_string());
+                continue;
+            }
+
+            // numeric token like "_1_" → lane index (NOT a read role)
+            if p.chars().all(|c| c.is_ascii_digit()) {
+                l_part = Some((*p).to_string());
+                continue;
+            }
+
+            // otherwise part of sample name
+            sample_parts.push((*p).to_string());
+        }
+        let sample =  if sample_parts.is_empty(){
+            self.sample_from_parent_dir_or_stem(file_path)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "Could not determine sample name from path or filename: '{}'",
+                        file_path
+                    )
+                })
+        }else {
+            sample_parts.join("_")
+        };
+        let lane = format!("{:?}_{:?}", s_part, l_part );
+
+        Some(ParsedFile {
+            sample,
+            kind: ParsedKind::Fastq { lane, role },
+            path: file_path.to_string(),
         })
     }
-    /*
-    fn parse_filename_split(&self, file_path: &str) -> Option<(String, String, String)> {
-        // Split the path into parts based on '/' and then split by '_'
 
-        if let Some(ret) = self.parse_matrix_triplets( file_path ){
-            return Some(ret);
+
+    /// Create a prefixed h5 as <sample>_<original>.h5.
+    /// Accepts existing file or existing hardlink; otherwise tries hardlink, falls back to copy.
+    fn materialize_prefixed_h5(&self, file_path: &str, sample: &str) -> io::Result<String> {
+        let src = Path::new(file_path);
+
+        let fname = self
+            .extract_basename(file_path)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "h5 has no basename"))?;
+
+        let dst = src
+            .parent()
+            .map(|p| p.join(format!("{sample}_{fname}")))
+            .unwrap_or_else(|| PathBuf::from(format!("{sample}_{fname}")));
+
+        // ✅ Accept if destination already exists (idempotent)
+        if dst.exists() {
+            return Ok(dst.to_string_lossy().to_string());
         }
 
-        let parts: Vec<&str> = file_path.split('/').last()?.split('_').collect();
-
-        // Find the index of "S" and "L" if present
-        let mut sample_parts = Vec::new();
-        let mut tech = Vec::new();
-        let mut read_type = None;
-
-        for part in &parts {
-            if sample_parts.is_empty() {
-                // some less clever sample names might be S1 S2 S345223
-                sample_parts.push(part.to_string());
+        // Try hard link first (cheap, no space)
+        match fs::hard_link(src, &dst) {
+            Ok(()) => return Ok(dst.to_string_lossy().to_string()),
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
+                // race condition / parallel runs
+                return Ok(dst.to_string_lossy().to_string());
             }
-            else if part.starts_with('S') && part.len() > 1 && part[1..].chars().all(|c| c.is_digit(10) ) {
-                // Skip over "S" and "L" parts, which are lane-related
-                tech.push( part.to_string() );
-                //println!("Skipping {}", part);
-                continue;
-            } else if part.starts_with('L') && part.len() == 4 && part[1..].chars().all(|c| c.is_digit(10) ) {
-                // Skip the "L" part, which is lane-related
-                //println!("Skipping {}", part);
-                tech.push( part.to_string() );
-                continue;
-            } else if part.starts_with("R1") || part.starts_with("R2") || part.starts_with("I1") {
-                // This is the read type (R1, R2, I1)
-                read_type = Some(part[0..2].to_string());
-                //println!("Found an READ part {}", part);
-                break
-            } else {
-                // Otherwise, it's part of the sample name
-                //println!("Found an sample part {}", part);
-                sample_parts.push(part.to_string());
+            Err(e) => {
+                // EXDEV or permissions → fallback to copy
+                eprintln!(
+                    "WARNING: hard_link failed for {} -> {} ({e:?}); falling back to copy",
+                    src.display(),
+                    dst.display()
+                );
             }
         }
 
-        if let Some(read) = read_type {
-            // Join the sample parts to form the sample name
-            let sample_name = sample_parts.join("_");
-            let technicalities = tech.join("_");
-            Some((sample_name.to_string(), technicalities.to_string(), read.to_string()))
+        fs::copy(src, &dst)?;
+        Ok(dst.to_string_lossy().to_string())
+    }
+
+    fn sample_from_parent_dir_or_stem(&self, file_path: &str) -> Option<String> {
+        let p = Path::new(file_path);
+        if let Some(parent) = p.parent()
+            .and_then(|pp| pp.parent())
+            .and_then(|gp| gp.file_name())
+            .and_then(|s| s.to_str()) {
+            if !parent.is_empty() {
+                return Some(parent.to_string());
+            }
+        }
+        p.file_stem().and_then(|s| s.to_str()).map(|s| s.to_string())
+    }
+
+    /// Extract basename
+    fn extract_basename(&self, file_path: &str) -> Option<String> {
+        Path::new(file_path)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(|s| s.to_string())
+    }
+
+    /// When any of the 10x triplet files is encountered, zip them into <sample>.10x.zip and return it.
+    fn handle_10x_triplet(&self, file_path: &str) -> Option<(String, PathBuf)> {
+        let path = Path::new(file_path);
+        let fname = path.file_name()?.to_str()?;
+
+        if !matches!(fname, "matrix.mtx.gz" | "features.tsv.gz" | "barcodes.tsv.gz") {
+            return None;
+        }
+
+        // directory containing the triplet
+        let level3 = path.parent()?;
+        let level3_name = level3.file_name()?.to_string_lossy();
+
+        // check triplet completeness
+        let has_triplet = level3.join("matrix.mtx.gz").exists()
+            && level3.join("features.tsv.gz").exists()
+            && level3.join("barcodes.tsv.gz").exists();
+
+        if !has_triplet {
+            return None;
+        }
+
+        // parent dir
+        let level2 = level3.parent()?;
+        let level2_name = level2.file_name()?.to_string_lossy();
+
+        // parent of parent
+        let level1 = level2.parent()?;
+        let level1_name = level1.file_name()?.to_string_lossy().to_string();
+
+        let sample_name = if (level3_name.ends_with("feature_matrix") || level3_name.ends_with("feature_bc_matrix"))
+            && level2_name == "outs"
+        {
+            level1_name
+        } else if level2_name.starts_with("out") {
+            level1_name
+        } else if level3_name.ends_with("feature_matrix")
+            || level3_name.ends_with("feature_bc_matrix")
+            || level3_name.ends_with("filtered_feature_bc_matrix")
+            || level3_name.ends_with("filtered_files")
+        {
+            // GEO-style: sample/filtered_feature_bc_matrix
+            level2_name.to_string()
         } else {
-            None // In case there's no read type found
-        }
-    }*/
+            eprintln!(
+                "WARNING: Found 10x triplet at '{}' but directory structure does not match any rule → ignoring.",
+                level3.display()
+            );
+            return None;
+        };
 
-    /// fix the barcodes.tsv.gz, features.tsv.gz and matrix.mtx.gz files
+        let zip_path = level2.join(format!("{sample_name}.10x.zip"));
+        if zip_path.exists() {
+            return Some((sample_name, zip_path));
+        }
+
+        let status = Command::new("zip")
+            .arg("-r")
+            .arg(&zip_path)
+            .arg(&level3)
+            .status()
+            .ok()?;
+
+        if !status.success() {
+            eprintln!("Failed zipping {}", level3.display());
+            return None;
+        }
+
+        Some((sample_name, zip_path))
+    }
+
+    /// Detect and convert 10x triplets to a single (sample, "10x", zip_path) record.
     fn parse_matrix_triplets(&self, file_path: &str) -> Option<(String, String, String)> {
-        let suffixes = [
-            ("barcodes.tsv.gz", "barcodes", "tsv"),
-            ("features.tsv.gz", "features", "tsv"),
-            ("matrix.mtx.gz",   "matrix",   "mtx"),
-        ];
-
-        for (suffix, kind, ext) in suffixes {
-            if let Some(stripped) = file_path.strip_suffix(suffix) {
-                return Some((stripped.to_string(), kind.to_string(), ext.to_string()));
-            }
+        if let Some((sample_name, zip_path)) = self.handle_10x_triplet(file_path) {
+            return Some((
+                sample_name,
+                "10x".to_string(),
+                zip_path.to_string_lossy().to_string(),
+            ));
         }
-
         None
     }
 
-    /// Retrieve filenames by sample name, sorted by filename lexicographically
-    fn get_files(&self, ids: Option<&Vec<usize>> ) -> Vec<(String, String)> {
-        let mut sorted_files = match ids {
-            Some(id_s ) => id_s.into_iter().map(|id| self.filenames[*id].clone()).collect(),
-            None => self.filenames.clone(),
-        };
-        // Sort by the filename (first element of the tuple)
-        sorted_files.sort_by(|a, b| a.0.cmp(&b.0)); 
-        sorted_files
-    }
-
-    // Retrieve filenames by sample name, sorted lexicographically
-    fn get_files_by_sample(&self, sample: &str) -> Option<Vec<(String, String)>> {
-        self.filenames_by_sample.get(sample).map(|indices| {
-            // Sort the indices lexicographically
-            self.get_files( Some(indices) )
-        })
-    }
-
-    // Retrieve filenames by sample name + technicalities, sorted lexicographically
-    fn get_files_by_sample_tech(&self, sample: &str, tech: &str) -> Option<Vec<(String,String)>> {
-        self.filenames_by_sample_tech.get(&(sample.to_string(), tech.to_string())).map(|indices| {
-            // Sort the indices lexicographically
-            self.get_files( Some(indices) )
-        })
-    }
-
-    // Helper function to extract the basename
-    fn extract_basename(&self, file_path: &str ) -> Option<String> {
-        Path::new(file_path).file_name() // Extract the file name
-            .and_then(|name| name.to_str())               // Convert OsStr to &str
-            .map(|s| s.to_string())                       // Convert &str to String
-    }
-
-    fn compute_file_md5_incremental( &self, file_path:&str ) -> io::Result<String> {
+    fn compute_file_md5_incremental(&self, file_path: &str) -> io::Result<String> {
         if self.omit_md5 {
             return Ok("omitted".to_string());
         }
-        // Run the md5sum command
-        let output = Command::new("md5sum")
-            .arg(file_path)
-            .output()?;
-        // Check if the command was successful
+        let output = Command::new("md5sum").arg(file_path).output()?;
         if !output.status.success() {
             return Err(io::Error::new(io::ErrorKind::Other, "md5sum command failed"));
         }
-
         let hash = String::from_utf8_lossy(&output.stdout);
-        Ok( format!("{}", hash.split_whitespace().next().unwrap() ) )
+        Ok(format!("{}", hash.split_whitespace().next().unwrap_or("none")))
     }
-
 
     fn get_md5sum(&self, file_path: &str) -> String {
         let path = Path::new(file_path);
-        let md5_file = path.with_extension("fastq.gz.md5sum");
+
+        // keep your old convention
+        let md5_file = if file_path.ends_with(".fastq.gz") {
+            path.with_extension("fastq.gz.md5sum")
+        } else if file_path.ends_with(".fq.gz") {
+            path.with_extension("fq.gz.md5sum")
+        } else {
+            path.with_extension("md5sum")
+        };
+
         if md5_file.exists() {
             if let Ok(file) = File::open(&md5_file) {
                 let reader = BufReader::new(file);
@@ -312,11 +675,45 @@ impl SampleFiles {
             let _ = fs::write(&md5_file, &md5sum);
             return md5sum;
         }
+
         "none".to_string()
     }
-
-
-
-
-
 }
+
+
+
+fn looks_like_sra_accession(basename: &str) -> bool {
+    // SRR/ERR/DRR + digits (common SRA run accessions)
+    // Example: SRR6333601
+    let b = basename.as_bytes();
+    if b.len() < 4 { return false; }
+    let prefix = &basename[..3];
+    if prefix != "SRR" && prefix != "ERR" && prefix != "DRR"  && prefix != "GSE" { return false; }
+    basename[3..].chars().all(|c| c.is_ascii_digit())
+}
+
+fn has_explicit_read_token(name: &str) -> bool {
+    // covers typical conventions: _R1_, _R2_, _I1_, _I2_, _R1., _R2., _I1., _I2.
+    let n = name;
+    n.contains("_R1") || n.contains("_R2") || n.contains("_I1") || n.contains("_I2")
+}
+
+fn should_ignore_fastq_by_name(file_name: &str) -> bool {
+    // Most direct: your exact failing pattern
+    if file_name.contains(".bam.") || file_name.contains(".bam.annotated.") {
+        return true;
+    }
+
+    if file_name.starts_with("test") {
+        return true;
+    }
+
+    // More general: SRR/ERR/DRR-run FASTQs without explicit read role token
+    // (these frequently won't match lane-style naming)
+    let stem = file_name
+        .trim_end_matches(".fastq.gz")
+        .trim_end_matches(".fq.gz");
+
+    looks_like_sra_accession(stem) && !has_explicit_read_token(file_name)
+}
+
