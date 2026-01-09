@@ -1,10 +1,8 @@
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashSet, BTreeSet};
 use std::fs::{self, File};
-use std::io::{self, BufRead, BufReader};
-use std::io::BufWriter;
+use std::io::{self, Read, BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::io::Write;
 
 #[derive(Debug, Default)]
 pub struct LaneFastqs {
@@ -52,6 +50,22 @@ pub struct SampleRecord {
 }
 
 impl SampleRecord {
+    
+    pub fn fastq_source_folders(&self) -> String
+    {
+        let mut folders: BTreeSet<String> = BTreeSet::new();
+
+        for (_lane_key, lane) in &self.lanes {
+            for (_role, path) in &lane.reads {
+                if let Some(parent) = Path::new(path).parent() {
+                    folders.insert(parent.to_string_lossy().to_string());
+                }
+            }
+        }
+
+        folders.into_iter().collect::<Vec<_>>().join(",")
+    }
+
     /// Render a single flattened row for this sample: Sample + TenX + H5 + (lane blocks...)
     pub fn row_cells<F>(&self, roles: &[String], fmt: &F, max_lanes: usize) -> Vec<String>
     where
@@ -60,6 +74,7 @@ impl SampleRecord {
         let mut out = Vec::new();
 
         // first columns
+        out.push(self.fastq_source_folders());
         out.push(self.name.clone());
         out.push(self.tenx.as_ref().map(|p| fmt(p)).unwrap_or_default());
         out.push(self.h5_files.as_ref().map(|p| fmt(p)).unwrap_or_default());
@@ -80,9 +95,32 @@ impl SampleRecord {
         out
     }
 
+    /// Iterate all file paths that belong to this sample record:
+    /// - TenX bundle (if any)
+    /// - H5 file (if any)
+    /// - all lane read files (FASTQs)
+    pub fn all_paths<'a>(&'a self) -> impl Iterator<Item = &'a str> + 'a {
+        let tenx = self.tenx.as_deref().into_iter();
+        let h5   = self.h5_files.as_deref().into_iter();
+        let fastqs = self
+            .lanes
+            .values()
+            .flat_map(|lane| lane.reads.values())
+            .map(|s| s.as_str());
+
+        tenx.chain(h5).chain(fastqs)
+    }
+
     /// Number of lanes
     pub fn len(&self) -> usize {
         self.lanes.len()
+    }
+    pub fn total_len(&self) -> usize{
+        let fastq = self.len();
+        let tenx  = self.tenx.iter().count();
+        let h5    = self.h5_files.iter().count();
+
+        fastq + tenx + h5
     }
 }
 
@@ -124,10 +162,17 @@ impl SampleFiles {
         }
     }
 
+    /// Total number of recorded samples
+    pub fn samples(&self) -> usize {
+        self.samples.len()
+    }
+
     /// Total number of recorded files (including 10x/h5/fastq)
     pub fn len(&self) -> usize {
         self.files.len()
     }
+    
+
 
     /// Write sample table (full paths)
     pub fn write_sample_files(&self, path: &str) -> io::Result<()> {
@@ -154,7 +199,7 @@ impl SampleFiles {
         let max_lanes = self.samples.values().map(|s| s.len()).max().unwrap_or(0);
 
         // header
-        write!(w, "Sample_Lane{sep}TenX{sep}H5")?;
+        write!(w, "Source_Path(s){sep}Sample_Lane{sep}TenX{sep}H5")?;
         for _block in 0..max_lanes {
             for role in &roles {
                 write!(w, "{sep}{role}")?;
@@ -642,12 +687,21 @@ impl SampleFiles {
         if self.omit_md5 {
             return Ok("omitted".to_string());
         }
-        let output = Command::new("md5sum").arg(file_path).output()?;
-        if !output.status.success() {
-            return Err(io::Error::new(io::ErrorKind::Other, "md5sum command failed"));
+
+        let mut f = File::open(file_path)?;
+        let mut ctx = md5::Context::new();
+
+        // HEAP allocation, not stack
+        let mut buf = vec![0u8; 1024 * 1024]; // 1 MiB buffer on heap
+        loop {
+            let n = f.read(&mut buf)?;
+            if n == 0 {
+                break;
+            }
+            ctx.consume(&buf[..n]);
         }
-        let hash = String::from_utf8_lossy(&output.stdout);
-        Ok(format!("{}", hash.split_whitespace().next().unwrap_or("none")))
+
+        Ok(format!("{:x}", ctx.compute()))
     }
 
     fn get_md5sum(&self, file_path: &str) -> String {
@@ -677,6 +731,117 @@ impl SampleFiles {
         }
 
         "none".to_string()
+    }
+
+    pub fn write_collect_all_files_script_sh<P: AsRef<Path>>(&self, path: P, dest:&str ) -> std::io::Result<()> {
+        let f = File::create(path)?;
+        let mut w = BufWriter::new(f);
+
+        writeln!(w, "#!/usr/bin/env bash")?;
+        writeln!(w, "set -euo pipefail")?;
+        writeln!(w)?;
+        writeln!(w, "# Collect ALL files referenced by rust-geo-prep outputs into one folder.")?;
+        writeln!(w, "# Change copy tool, e.g.: COPY_CMD=(rsync --progress)   or   COPY_CMD=(cp -v)")?;
+        writeln!(w, "COPY_CMD=(cp -v)")?;
+        writeln!(w, "DEST=\"{}\"", dest)?;
+        writeln!(w, "mkdir -p \"$DEST\"")?;
+        writeln!(w)?;
+
+        // Iterate samples in stable order (BTreeMap iteration is sorted already).
+        for sample in self.samples.values() {
+            writeln!(w, "###############################################################################")?;
+            writeln!(w, "# Sample: {}", sample.name)?;
+            writeln!(w, "###############################################################################")?;
+
+            // De-duplicate within a sample and keep stable order
+            let mut uniq: BTreeSet<String> = BTreeSet::new();
+            for p in sample.all_paths() {
+                uniq.insert(p.to_string());
+            }
+
+            for src in uniq {
+                let p = std::path::Path::new(&src);
+                let base = p
+                    .file_name()
+                    .map(|x| x.to_string_lossy().to_string())
+                    .unwrap_or_else(|| "unknown.file".to_string());
+
+                // Collision-resistant dest name
+                let dest_name =  base.clone();
+
+                // Escape quotes for bash
+                let src_esc = src.replace('"', "\\\"");
+                let dest_esc = dest_name.replace('"', "\\\"");
+
+                writeln!(w, "\"${{COPY_CMD[@]}}\" \"{}\" \"$DEST/{}\"", src_esc, dest_esc)?;
+            }
+
+            writeln!(w)?;
+        }
+
+        Ok(())
+    }
+
+    pub fn write_collect_all_files_script_ps1<P: AsRef<Path>>(
+        &self,
+        path: P,
+        dest: &str,
+    ) -> std::io::Result<()> {
+        use std::io::Write;
+        let mut w = std::io::BufWriter::new(std::fs::File::create(path)?);
+
+        writeln!(w, "# PowerShell collection script generated by rust-geo-prep")?;
+        writeln!(w, "# Copies ALL referenced files into a single folder WITHOUT renaming.")?;
+        writeln!(w, "# Filenames remain identical to md5/sample tables.")?;
+        writeln!(w)?;
+        writeln!(w, "$ErrorActionPreference = \"Stop\"")?;
+        writeln!(w)?;
+        writeln!(w, "$DEST = \"{}\"", dest)?;
+        writeln!(w, "New-Item -ItemType Directory -Force -Path $DEST | Out-Null")?;
+        writeln!(w)?;
+        writeln!(w, "# Change copy tool here if needed")?;
+        writeln!(w, "$COPY = {{ param($src,$dst) Copy-Item -LiteralPath $src -Destination $dst -Force }}")?;
+        writeln!(w)?;
+
+        for (sample, rec) in &self.samples {
+
+            writeln!(w)?;
+            writeln!(w, "###############################################################################")?;
+            writeln!(w, "# Sample: {}", sample)?;
+            writeln!(w, "###############################################################################")?;
+
+            // collect ALL file paths belonging to this sample
+            let mut files = Vec::new();
+
+            if let Some(p) = &rec.tenx {
+                files.push(p.clone());
+            }
+            if let Some(p) = &rec.h5_files {
+                files.push(p.clone());
+            }
+
+            for lane in rec.lanes.values() {
+                for p in lane.reads.values() {
+                    files.push(p.clone());
+                }
+            }
+
+            for src in files {
+                let basename = std::path::Path::new(&src)
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .to_string();
+
+                writeln!(
+                    w,
+                    "& $COPY \"{}\" (Join-Path $DEST \"{}\")",
+                    src, basename
+                )?;
+            }
+        }
+
+        Ok(())
     }
 }
 

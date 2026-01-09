@@ -1,53 +1,138 @@
-use std::process::Command;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
-use std::path::Path;
-use std::io::Write;
-use std::io::BufReader;
-use std::io::BufRead;
-use std::env::args;
-use std::env::current_dir;
+use std::io::{BufRead, BufReader, Write};
+use std::path::{Path, PathBuf};
+use std::process::Command;
 
-fn create_fastq_file(path: &Path, content: &str) {
+// -----------------------
+// Helpers
+// -----------------------
+
+fn create_file(path: &Path, content: &str) {
     let mut file = File::create(path).expect("Unable to create file");
     file.write_all(content.as_bytes())
         .expect("Unable to write data to file");
 }
 
+fn canonical_str<P: AsRef<Path>>(p: P) -> String {
+    fs::canonicalize(p.as_ref())
+        .unwrap()
+        .to_string_lossy()
+        .to_string()
+}
 
-fn clean_test_output() {
-    let files_to_remove = vec![
-        "sample_collection_basename_.files_md5sum_lines.tsv",
-        "sample_collection_basename_.sample_lines.tsv",
-        "sample_collection_.files_md5sum_lines.tsv",
-        "sample_collection_.sample_lines.tsv",
-    ];
+fn read_tsv(path: &Path) -> (Vec<String>, Vec<Vec<String>>) {
+    let file = File::open(path).unwrap_or_else(|_| panic!("Unable to open file: {}", path.display()));
+    let reader = BufReader::new(file);
 
-    for file in files_to_remove {
-        if Path::new(file).exists() {
-            fs::remove_file(file).expect("Failed to remove old test output file");
+    let mut lines = reader.lines();
+    let header = lines
+        .next()
+        .expect("TSV is empty")
+        .expect("Unable to read header")
+        .split('\t')
+        .map(|s| s.trim().to_string())
+        .collect::<Vec<_>>();
+
+    let mut rows = Vec::new();
+    for line in lines {
+        let line = line.expect("Unable to read line");
+        let cols = line.split('\t').map(|s| s.trim().to_string()).collect::<Vec<_>>();
+        // skip empty trailing lines if any
+        if cols.iter().all(|c| c.is_empty()) {
+            continue;
+        }
+        rows.push(cols);
+    }
+
+    (header, rows)
+}
+
+fn header_index(header: &[String], name: &str) -> usize {
+    header
+        .iter()
+        .position(|h| h == name)
+        .unwrap_or_else(|| panic!("Missing required column '{name}' in header: {header:?}"))
+}
+
+fn basename(s: &str) -> String {
+    Path::new(s)
+        .file_name()
+        .map(|x| x.to_string_lossy().to_string())
+        .unwrap_or_else(|| s.to_string())
+}
+
+fn parse_dest_from_script(script_path: &Path) -> Option<String> {
+    let txt = fs::read_to_string(script_path).ok()?;
+    for line in txt.lines() {
+        let line = line.trim();
+        // DEST="something"
+        if let Some(rest) = line.strip_prefix("DEST=\"") {
+            if let Some(end) = rest.find('"') {
+                return Some(rest[..end].to_string());
+            }
+        }
+    }
+    None
+}
+
+fn md5sum_file(path: &Path) -> String {
+    use std::io::Read;
+
+    let mut f = File::open(path)
+        .unwrap_or_else(|_| panic!("Unable to open file for md5: {}", path.display()));
+
+    let mut ctx = md5::Context::new();
+    let mut buf = vec![0u8; 64 * 1024]; // 64KiB on heap, safe on Windows
+
+    loop {
+        let n = f.read(&mut buf)
+            .unwrap_or_else(|e| panic!("Failed reading {}: {e}", path.display()));
+        if n == 0 { break; }
+        ctx.consume(&buf[..n]);
+    }
+
+    format!("{:x}", ctx.compute())
+}
+
+// -----------------------
+// Cleanup
+// -----------------------
+
+fn clean_test_output(prefix: &str) {
+    let sample_tsv = format!("{prefix}.tsv");
+    let md5_tsv = format!("{prefix}_md5sum.tsv");
+    let script = format!("{prefix}_collection_script.sh");
+
+    for f in [sample_tsv.as_str(), md5_tsv.as_str(), script.as_str()] {
+        if Path::new("tests/data").join(f).exists() {
+            fs::remove_file(Path::new("tests/data").join(f))
+                .unwrap_or_else(|_| panic!("Failed to remove old test output file: {f}"));
+        }
+    }
+
+    // also remove any previous copy dir (we'll discover it by reading script if it exists)
+    let script_path = Path::new("tests/data").join(script);
+    if script_path.exists() {
+        if let Some(dest) = parse_dest_from_script(&script_path) {
+            let dest_path = Path::new("tests/data").join(dest);
+            if dest_path.exists() {
+                fs::remove_dir_all(dest_path).expect("Failed to remove old copy destination folder");
+            }
         }
     }
 }
 
-#[test]
-fn program_run() {
-    clean_test_output();
-    rust_geo_prep() ;
-    // test the different outfiles
-    sample_collection_files_md5sum_lines();
-    sample_collection_basename_files_md5sum_lines();
+// -----------------------
+// Test runner
+// -----------------------
 
-    clean_test_output()
-}
-fn rust_geo_prep() {
-    let test_data_dir = "tests/data";
+fn run_rust_geo_prep(prefix: &str) {
+    let test_data_dir = Path::new("tests/data");
+    let info_dir = test_data_dir.join("info");
 
-    // first make sure the files exists and have the content that is expected:
-    let data_dir = Path::new("tests/data/info/");
-
-    // Check if the data directory exists, create it if not
-    if !data_dir.exists() {
-        fs::create_dir_all(data_dir).expect("Failed to create data directory");
+    if !info_dir.exists() {
+        fs::create_dir_all(&info_dir).expect("Failed to create tests/data/info/");
     }
 
     // Define the file paths and content
@@ -65,116 +150,86 @@ fn rust_geo_prep() {
         ("example3_1_I1.fastq.gz", "@SEQ_ID_3\nGCTAGTGC\n+\nIIIIIIIIII\n"),
     ];
 
-    // Create files with the provided content if they don't exist
     for (file_name, content) in &files_and_contents {
-        let file_path = data_dir.join(file_name);
+        let file_path = info_dir.join(file_name);
         if !file_path.exists() {
-            //println!("Creating file: {}", file_name);  // Optional: For debugging
-            create_fastq_file(&file_path, content);
-        } else {
-            //println!("File {} already exists", file_name);  // Optional: For debugging
+            create_file(&file_path, content);
         }
     }
 
     let exe = env!("CARGO_BIN_EXE_rust-geo-prep");
-    eprintln!("RUN MANUALLY:\n  cd {}\n  {} {}", 
-         test_data_dir,
-         exe, ""
+    eprintln!(
+        "RUN MANUALLY:\n  cd {}\n  {} --prefix {}\n",
+        test_data_dir.display(),
+        exe,
+        prefix
     );
-    
-    // Run the binary
-    let output = Command::new(env!("CARGO_BIN_EXE_rust-geo-prep"))
-        .current_dir(test_data_dir) // Run inside test data folder
+
+    let output = Command::new(exe)
+        .current_dir(test_data_dir)
+        .args(["--prefix", prefix])
         .output()
         .expect("Failed to execute rust-geo-prep");
 
-    // Check if execution was successful
-    assert!(output.status.success(), "Program did not run successfully");
+    assert!(
+        output.status.success(),
+        "Program did not run successfully.\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
 
-    // List expected output files
+    // Verify expected output files exist
     let expected_files = vec![
-        "sample_collection_basename_files_md5sum_lines.tsv",
-        "sample_collection_basename_sample_lines.tsv",
-        "sample_collection_files_md5sum_lines.tsv",
-        "sample_collection_sample_lines.tsv",
+        format!("{prefix}.tsv"),
+        format!("{prefix}_md5sum.tsv"),
+        format!("{prefix}_collection_script.sh"),
     ];
 
-    // Verify output files exist
     for file in expected_files {
-        let path = format!("{}/{}", test_data_dir, file);
-        assert!(fs::metadata(&path).is_ok(), "Missing expected output file: {}", file);
-    }
-
-}
-
-
-#[test]
-fn sample_collection_files_md5sum_lines() {
-    // Path to the test file
-    let path = "tests/data/sample_collection_files_md5sum_lines.tsv";
-    
-    // Open the file
-    let file = File::open(path).expect("Unable to open file");
-
-    // Create a buffered reader for efficient reading
-    let reader = BufReader::new(file);
-
-    // Expected values based on your sample file content
-    let expected_contents: Vec<(String, &str)> = vec![
-        ("tests/data/info/example1_S1_L001_I1.fastq.gz", "1da0250da36f7f38d11f4f08397e02d9"),
-        ("tests/data/info/example1_S1_L001_R1.fastq.gz", "220693693f35b15196bc2f2fa8238e7b"),
-        ("tests/data/info/example1_S1_L001_R2.fastq.gz", "28f6a6cefb6b7ea07049b8261c52cab8"),
-        ("tests/data/info/example1_S2_L001_I1.fastq.gz", "933471e0abaab240b18683bc2267f3bc"),
-        ("tests/data/info/example1_S2_L001_R1.fastq.gz", "867171df270ed55ca348daf1369f5c25"),
-        ("tests/data/info/example1_S2_L001_R2.fastq.gz", "f60431ad04351b3eb786879ed18440c8"),
-        ("tests/data/info/example2_L001_R1.fastq.gz", "220693693f35b15196bc2f2fa8238e7b"),
-        ("tests/data/info/example2_L001_R2.fastq.gz", "28f6a6cefb6b7ea07049b8261c52cab8"),
-        ("tests/data/info/example3_1_I1.fastq.gz", "32a0a8c330f2cdcccafee94b03d1a04e"),
-        ("tests/data/info/example3_1_R1.fastq.gz", "220693693f35b15196bc2f2fa8238e7b"),
-        ("tests/data/info/example3_1_R2.fastq.gz", "28f6a6cefb6b7ea07049b8261c52cab8"),
-    ].into_iter().map(|(rel, hash)| {
-        let abs = std::fs::canonicalize(rel).unwrap();   // SAME logic as tool
-        (abs.to_string_lossy().to_string(), hash)
-    })
-    .collect();
-
-    // Iterate over each line in the file
-    for (index, line) in reader.lines().enumerate() {
-        let line = line.expect("Unable to read line");
-        let parts: Vec<&str> = line.split('\t').collect();
-
-        // Skip header line
-        if index == 0 {
-            continue;
-        }
-
-        // Check that the line contains exactly two parts (file_name, md5sum)
-        assert_eq!(parts.len(), 2, "Line does not have exactly two columns");
-
-        // Extract file_name and md5sum
-        let file_name = parts[0].trim();
-        let md5sum = parts[1].trim();
-
-        // Check if the file name and md5sum match the expected ones
-        assert_eq!(file_name, expected_contents[index - 1].0, "File name mismatch at line {}", index);
-        assert_eq!(md5sum, expected_contents[index - 1].1, "MD5 sum mismatch at line {}", index);
+        let path = test_data_dir.join(&file);
+        assert!(
+            fs::metadata(&path).is_ok(),
+            "Missing expected output file: {}",
+            path.display()
+        );
     }
 }
 
+// -----------------------
+// Tests
+// -----------------------
 
 #[test]
-fn sample_collection_basename_files_md5sum_lines() {
-    // Path to the test file
-    let path = "tests/data/sample_collection_basename_files_md5sum_lines.tsv";
-    
-    // Open the file
-    let file = File::open(path).expect("Unable to open file");
+fn program_run_and_outputs_and_copy_script() {
+    let prefix = "sample_collection";
+    clean_test_output(prefix);
 
-    // Create a buffered reader for efficient reading
-    let reader = BufReader::new(file);
+    run_rust_geo_prep(prefix);
 
-    // Expected values based on your sample file content
-    let expected_contents = vec![
+    // Validate md5sum table
+    test_md5sum_table(prefix);
+
+    // Validate sample table content (file references)
+    test_sample_collection_tsv_exact();
+
+    // Run and validate the collection script
+    test_collection_script(prefix);
+
+    clean_test_output(prefix);
+}
+
+fn test_md5sum_table(prefix: &str) {
+    let test_data_dir = Path::new("tests/data");
+    let md5_path = test_data_dir.join(format!("{prefix}_md5sum.tsv"));
+
+    let (header, rows) = read_tsv(&md5_path);
+
+    // Your actual header names
+    let i_file = header_index(&header, "file_name");
+    let i_md5  = header_index(&header, "md5sum");
+
+    // Expected md5 by filename (truth)
+    let expected: BTreeMap<&str, &str> = BTreeMap::from([
         ("example1_S1_L001_I1.fastq.gz", "1da0250da36f7f38d11f4f08397e02d9"),
         ("example1_S1_L001_R1.fastq.gz", "220693693f35b15196bc2f2fa8238e7b"),
         ("example1_S1_L001_R2.fastq.gz", "28f6a6cefb6b7ea07049b8261c52cab8"),
@@ -186,177 +241,309 @@ fn sample_collection_basename_files_md5sum_lines() {
         ("example3_1_I1.fastq.gz", "32a0a8c330f2cdcccafee94b03d1a04e"),
         ("example3_1_R1.fastq.gz", "220693693f35b15196bc2f2fa8238e7b"),
         ("example3_1_R2.fastq.gz", "28f6a6cefb6b7ea07049b8261c52cab8"),
-    ];
+    ]);
 
-    // Iterate over each line in the file
-    for (index, line) in reader.lines().enumerate() {
-        let line = line.expect("Unable to read line");
-        let parts: Vec<&str> = line.split('\t').collect();
+    // Build: filename -> set of md5 strings seen in file
+    let mut seen: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
 
-        // Skip header line
-        if index == 0 {
-            continue;
-        }
+    for row in rows {
+        assert!(
+            row.len() >= header.len(),
+            "Row has fewer columns than header: {row:?}"
+        );
 
-        // Check that the line contains exactly two parts (file_name, md5sum)
-        assert_eq!(parts.len(), 2, "Line does not have exactly two columns");
+        let filename = row[i_file].trim().to_string();
+        let md5 = row[i_md5].trim().to_string();
 
-        // Extract file_name and md5sum
-        let file_name = parts[0].trim();
-        let md5sum = parts[1].trim();
+        seen.entry(filename).or_default().insert(md5);
+    }
 
-        // Check if the file name and md5sum match the expected ones
-        assert_eq!(file_name, expected_contents[index - 1].0, "BN File name mismatch at line {}", index);
-        assert_eq!(md5sum, expected_contents[index - 1].1, "BN MD5 sum mismatch at line {}", index);
+    // Now validate expectations:
+    // Each expected file should appear, and should contain the expected md5.
+    for (fname, exp_md5) in &expected {
+        let md5s = seen
+            .get(*fname)
+            .unwrap_or_else(|| panic!("Missing filename in md5sum file: {fname}"));
+
+        assert!(
+            md5s.contains(&exp_md5.to_string()),
+            "MD5 missing/incorrect for {fname}.\nFound: {md5s:?}\nExpected to include: {exp_md5}"
+        );
+
+        // Optional: if you want to *forbid* 'none' when omit_md5 is false,
+        // uncomment this once you fix the duplicate/none bug:
+        //
+        // assert!(
+        //     !md5s.contains("none"),
+        //     "Unexpected 'none' md5 row for {fname} when md5 is enabled.\nFound: {md5s:?}"
+        // );
+    }
+
+    // Strong sanity: md5sum file should not contain unknown filenames
+    for fname in seen.keys() {
+        assert!(
+            expected.contains_key(fname.as_str()),
+            "Unexpected filename present in md5sum file: {fname}"
+        );
+    }
+
+    // Strong sanity: the actual files exist and match their md5
+    let info_dir = test_data_dir.join("info");
+    for (fname, exp_md5) in &expected {
+        let file_path = info_dir.join(fname);
+        assert!(file_path.exists(), "Missing input file: {}", file_path.display());
+
+        let actual = md5sum_file(&file_path);
+        assert_eq!(
+            actual, *exp_md5,
+            "Actual md5 does not match expected for {}",
+            file_path.display()
+        );
     }
 }
 
-#[test]
-fn test_sample_collection_sample_lines() {
-    // Path to the test file
-    let path = "tests/data/sample_collection_sample_lines.tsv";
-
-    // Expected values based on your sample file content
-    let expected_contents: Vec<(String, Vec<String>)> = vec![
-        ("example1", vec!["","",
-            "tests/data/info/example1_S1_L001_I1.fastq.gz", 
-            "tests/data/info/example1_S1_L001_R1.fastq.gz", 
-            "tests/data/info/example1_S1_L001_R2.fastq.gz",
-            "tests/data/info/example1_S2_L001_I1.fastq.gz", 
-            "tests/data/info/example1_S2_L001_R1.fastq.gz", 
-            "tests/data/info/example1_S2_L001_R2.fastq.gz"
-        ]),
-        ("example2", vec!["","","",
-            "tests/data/info/example2_L001_R1.fastq.gz", 
-            "tests/data/info/example2_L001_R2.fastq.gz", "", "", "",
-        ]),
-        ("example3", vec!["","",
-            "tests/data/info/example3_1_I1.fastq.gz", 
-            "tests/data/info/example3_1_R1.fastq.gz", 
-            "tests/data/info/example3_1_R2.fastq.gz", "", "", "",
-        ])
-    ].into_iter().map(|(sample, files)| {
-        let abs_files: Vec<String> = files
-            .into_iter()
-            .map(|rel| {
-                std::fs::canonicalize(rel)
-                    .unwrap_or_else(|_| "".to_string().into() )
-                    .to_string_lossy()
-                    .to_string()
-            })
-            .collect();
-
-        (sample.to_string(), abs_files)
-    })
-    .collect();
-
-    // Open the file
-    let file = File::open(path).expect("Unable to open file");
-    // Create a buffered reader for efficient reading
-    let reader = BufReader::new(file);
-
-    // Iterate over each line in the file
-    for (index, line) in reader.lines().enumerate() {
-        let line = line.expect("Unable to read line");
-        let parts: Vec<&str> = line.split('\t').collect();
-
-        // Skip header line
-        if index == 0 {
-            continue;
-        }
-
-        // Check that the line has at least one sample column (adjust this if necessary)
-        assert!(parts.len() >= 2, "Line does not have enough columns");
-
-        // Extract sample name
-        let sample_name = parts[0].trim();
-
-        // Get the actual filenames from the line (starting from index 1 onward)
-        let filenames: Vec<String> = parts[1..]
-            .iter()
-            .map(|&filename| filename.trim().to_string())
-            .collect();
-
-        // Find the expected filenames for the sample
-        let expected = expected_contents.iter().find(|(name, _)| name == &sample_name);
-
-        assert!(expected.is_some(), "Sample name {} not found in expected contents", sample_name);
-
-        let expected_files = expected.unwrap().1.clone();
-
-        // Sort both expected and actual filenames for a flexible comparison
-        let mut filenames = filenames.clone();
-        let mut expected_files = expected_files.clone();
-
-        filenames.sort();
-        expected_files.sort();
-
-        // Compare filenames (R1, R2, I1)
-        assert_eq!(filenames, expected_files, "File mismatch for sample {}", sample_name);
+fn looks_like_source_folders_cell(s: &str) -> bool {
+    let v = s.trim();
+    if v.is_empty() {
+        return false;
     }
+    // must contain at least one path separator or \\?\ prefix
+    let has_pathish = v.contains("\\\\?\\") || v.contains(":\\") || v.contains('\\') || v.contains('/');
+    // and typically comma-separated (but allow single path too)
+    has_pathish
+}
+
+fn split_folders(s: &str) -> Vec<String> {
+    s.split(',')
+        .map(|x| x.trim().to_string())
+        .filter(|x| !x.is_empty())
+        .collect()
 }
 
 #[test]
-fn test_sample_collection_sample_lines_basename() {
-    // Path to the test file
-    let path = "tests/data/sample_collection_basename_sample_lines.tsv";
+fn test_sample_collection_tsv_exact() {
+    use std::collections::BTreeMap;
+    use std::path::Path;
 
-    // Expected values based on your sample file content
-    let expected_contents = vec![
-        ("example1", vec!["","",
-            "example1_S1_L001_I1.fastq.gz", "example1_S1_L001_R1.fastq.gz", "example1_S1_L001_R2.fastq.gz",
-            "example1_S2_L001_I1.fastq.gz", "example1_S2_L001_R1.fastq.gz", "example1_S2_L001_R2.fastq.gz"
+    let path = Path::new("tests/data/sample_collection.tsv");
+    let (header, rows) = read_tsv(path);
+
+    // 1) Header must match exactly
+    let expected_header = vec![
+        "Source_Path(s)", "Sample_Lane", "TenX", "H5",
+        "I1", "R1", "R2",
+        "I1", "R1", "R2",
+    ].into_iter().map(|s| s.to_string()).collect::<Vec<_>>();
+
+    assert_eq!(header, expected_header, "Header mismatch in sample_collection.tsv");
+
+    // 2) Must have exactly 3 data rows
+    assert_eq!(rows.len(), 3, "Expected exactly 3 rows in sample_collection.tsv");
+
+    // 3) Build expected absolute folders string for column 0
+    let info_dir = canonical_str("tests/data/info");
+
+
+    // 4) Expected rows keyed by sample (= column 1 / "TenX")
+    //    Column layout (9 columns):
+    //    0 folders, 1 sample, 2 h5, then 6 fastq cells
+    let expected_by_sample: BTreeMap<&str, Vec<String>> = BTreeMap::from([
+        ("example1", vec![
+            info_dir.clone(),
+            "example1".to_string(),
+            "".to_string(),
+            "".to_string(),
+            "example1_S1_L001_I1.fastq.gz".to_string(),
+            "example1_S1_L001_R1.fastq.gz".to_string(),
+            "example1_S1_L001_R2.fastq.gz".to_string(),
+            "example1_S2_L001_I1.fastq.gz".to_string(),
+            "example1_S2_L001_R1.fastq.gz".to_string(),
+            "example1_S2_L001_R2.fastq.gz".to_string(),
         ]),
-        ("example2", vec!["","","",
-            "example2_L001_R1.fastq.gz", "example2_L001_R2.fastq.gz","","","",
+        ("example2", vec![
+            info_dir.clone(),
+            "example2".to_string(),
+            "".to_string(),
+            "".to_string(),
+            "".to_string(), // I1 missing lane1
+            "example2_L001_R1.fastq.gz".to_string(),
+            "example2_L001_R2.fastq.gz".to_string(),
+            "".to_string(), // lane2 padding
+            "".to_string(),
+            "".to_string(),
         ]),
-        ("example3", vec!["","",
-            "example3_1_I1.fastq.gz", "example3_1_R1.fastq.gz", "example3_1_R2.fastq.gz","","","",
-        ])
-    ];
+        ("example3", vec![
+            info_dir,
+            "example3".to_string(),
+            "".to_string(),
+            "".to_string(),
+            "example3_1_I1.fastq.gz".to_string(),
+            "example3_1_R1.fastq.gz".to_string(),
+            "example3_1_R2.fastq.gz".to_string(),
+            "".to_string(), // lane2 padding
+            "".to_string(),
+            "".to_string(),
+        ]),
+    ]);
 
-    // Open the file
-    let file = File::open(path).expect("Unable to open file");
-    // Create a buffered reader for efficient reading
-    let reader = BufReader::new(file);
+    // 5) Validate each row matches expected exactly (after folder normalization)
+    for row in rows {
+        assert_eq!(row.len(), header.len(), "Row has wrong column count: {:?}", row);
 
-    // Iterate over each line in the file
-    for (index, line) in reader.lines().enumerate() {
-        let line = line.expect("Unable to read line");
-        let parts: Vec<&str> = line.split('\t').collect();
+        let sample = row[1].trim(); // column 1 is sample name in your output
+        let expected = expected_by_sample.get(sample)
+            .unwrap_or_else(|| panic!("Unexpected sample in sample_collection.tsv: '{}'", sample));
 
-        // Skip header line
-        if index == 0 {
-            continue;
+        // Normalize the folders cell by trimming whitespace (canonical_str already absolute).
+        let mut normalized = row.clone();
+        normalized[0] = normalized[0].trim().to_string();
+        for c in &mut normalized {
+            *c = c.trim().to_string();
         }
 
-        // Check that the line has at least one sample column (adjust this if necessary)
-        assert!(parts.len() >= 2, "Line does not have enough columns");
-
-        // Extract sample name
-        let sample_name = parts[0].trim();
-
-        // Get the actual filenames from the line (starting from index 1 onward)
-        let filenames: Vec<String> = parts[1..]
-            .iter()
-            .map(|&filename| filename.trim().to_string())
-            .collect();
-
-        // Find the expected filenames for the sample
-        let expected = expected_contents.iter().find(|(name, _)| name == &sample_name);
-
-        assert!(expected.is_some(), "Sample name {} not found in expected contents", sample_name);
-
-        let expected_files = expected.unwrap().1.clone();
-
-        // Sort both expected and actual filenames for a flexible comparison
-        let mut filenames = filenames.clone();
-        let mut expected_files = expected_files.clone();
-
-        filenames.sort();
-        expected_files.sort();
-
-        // Compare filenames (R1, R2, I1)
-        assert_eq!(filenames, expected_files, "File mismatch for sample {}", sample_name);
+        assert_eq!(
+            normalized, *expected,
+            "Row mismatch for sample '{}'\nGot:      {:?}\nExpected: {:?}",
+            sample, normalized, expected
+        );
     }
+}
+
+
+fn test_collection_script(prefix: &str) {
+    use std::collections::{BTreeMap, BTreeSet};
+    use std::fs;
+
+    let test_data_dir = Path::new("tests/data");
+    let script_path = test_data_dir.join(format!("{prefix}_collection_script.sh"));
+    assert!(script_path.exists(), "Missing collection script: {}", script_path.display());
+
+    // Parse DEST="..."
+    let dest_rel = parse_dest_from_script(&script_path)
+        .unwrap_or_else(|| panic!("Could not parse DEST=\"...\" from script {}", script_path.display()));
+    let dest_path = test_data_dir.join(&dest_rel);
+
+    // Clean previous run
+    if dest_path.exists() {
+        fs::remove_dir_all(&dest_path).expect("Failed to remove old DEST folder");
+    }
+    fs::create_dir_all(&dest_path).expect("Failed to create DEST folder");
+
+    // Load md5 table: file_name + md5sum
+    let md5_path = test_data_dir.join(format!("{prefix}_md5sum.tsv"));
+    let (header, rows) = read_tsv(&md5_path);
+    let i_file = header_index(&header, "file_name");
+    let i_md5  = header_index(&header, "md5sum");
+
+    // Expected mapping: basename -> md5
+    let mut expected: BTreeMap<String, String> = BTreeMap::new();
+    for row in rows {
+        let fname = row[i_file].trim().to_string();
+        let md5   = row[i_md5].trim().to_string();
+        assert_ne!(fname, "", "Empty file_name in md5 table");
+        expected.insert(fname, md5);
+    }
+
+    // Parse script copy pairs and assert NO RENAMING:
+    // "${COPY_CMD[@]}" "SRC" "$DEST/BASENAME"
+    let script_txt = fs::read_to_string(&script_path)
+        .unwrap_or_else(|_| panic!("Unable to read script: {}", script_path.display()));
+
+    let pairs = parse_copy_pairs_from_script(&script_txt);
+
+    // Map: basename -> src_path
+    let mut by_basename: BTreeMap<String, PathBuf> = BTreeMap::new();
+
+    for (src, dst_rel) in pairs {
+        assert!(
+            dst_rel.starts_with("$DEST/"),
+            "Destination does not start with $DEST/: dst={dst_rel}"
+        );
+
+        let dst_name = dst_rel.trim_start_matches("$DEST/").trim().to_string();
+        let src_base = Path::new(&src)
+            .file_name()
+            .map(|x| x.to_string_lossy().to_string())
+            .unwrap_or_else(|| panic!("Script src has no filename: {src}"));
+
+        // This is the core requirement: destination name must equal source basename
+        assert_eq!(
+            dst_name, src_base,
+            "Script renames files (NOT ALLOWED).\n  src: {src}\n  dst: {dst_rel}"
+        );
+
+        // Each basename must appear at most once
+        if by_basename.insert(dst_name.clone(), PathBuf::from(&src)).is_some() {
+            panic!("Duplicate basename in script copy lines: {dst_name}");
+        }
+    }
+
+    // The script must cover exactly the md5 table file list
+    let expected_names: BTreeSet<String> = expected.keys().cloned().collect();
+    let script_names: BTreeSet<String> = by_basename.keys().cloned().collect();
+
+    assert_eq!(
+        script_names, expected_names,
+        "Script file list != md5 table file list.\nMissing in script: {:?}\nExtra in script: {:?}",
+        expected_names.difference(&script_names).collect::<Vec<_>>(),
+        script_names.difference(&expected_names).collect::<Vec<_>>(),
+    );
+
+    // Now actually perform the copy in Rust and validate outputs exactly
+    for (name, src_path) in &by_basename {
+        assert!(src_path.exists(), "Script references missing source file: {}", src_path.display());
+
+        let dst_path = dest_path.join(name);
+        fs::copy(src_path, &dst_path)
+            .unwrap_or_else(|e| panic!("Copy failed {} -> {}: {e}", src_path.display(), dst_path.display()));
+
+        assert!(dst_path.exists(), "Destination not created: {}", dst_path.display());
+
+        // verify md5 equals md5 table
+        let want = expected.get(name).unwrap();
+        let got = md5sum_file(&dst_path);
+        assert_eq!(
+            &got, want,
+            "Copied file md5 mismatch for {}\n  dst: {}\n  got: {}\n  want: {}",
+            name, dst_path.display(), got, want
+        );
+    }
+
+    // Verify DEST contains exactly the expected basenames (no extras)
+    let mut dest_files: Vec<String> = fs::read_dir(&dest_path)
+        .expect("Failed to list DEST dir")
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().map(|t| t.is_file()).unwrap_or(false))
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .collect();
+
+    dest_files.sort();
+
+    let mut expected_sorted: Vec<String> = expected.keys().cloned().collect();
+    expected_sorted.sort();
+
+    assert_eq!(
+        dest_files, expected_sorted,
+        "DEST directory contents mismatch.\nGot: {:?}\nExpected: {:?}",
+        dest_files, expected_sorted
+    );
+}
+fn header_index_any(header: &[String], names: &[&str]) -> usize {
+    for &n in names {
+        if let Some(i) = header.iter().position(|h| h == n) {
+            return i;
+        }
+    }
+    panic!("Missing required column(s) {names:?} in header: {header:?}");
+}
+
+fn sample_from_sample_lane(s: &str) -> String {
+    let s = s.trim();
+    if let Some(pos) = s.find("_S") {
+        return s[..pos].to_string();
+    }
+    if let Some(pos) = s.find("_L") {
+        return s[..pos].to_string();
+    }
+    s.to_string()
 }

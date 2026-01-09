@@ -1,6 +1,7 @@
 
 use walkdir::WalkDir;
 use clap::Parser;
+use std::path::PathBuf;
 
 use std::collections::HashSet;
 #[cfg(unix)]
@@ -84,11 +85,17 @@ fn is_excluded_path(p: &std::path::Path, excludes: &[String]) -> bool {
 fn main(){
     let opts: Opts = Opts::parse();
     
-    let sample_file_path = format!("{}_sample_lines.tsv", opts.prefix);
-    let files_file_path = format!("{}_files_md5sum_lines.tsv", opts.prefix);
+    let sample_file_path = format!("{}.tsv", opts.prefix);
+    let files_file_path = format!("{}_md5sum.tsv", opts.prefix);
+    let collection_script_path = if cfg!(windows) {
+        format!("{}_collection_script.ps1", opts.prefix)
+    } else {
+        format!("{}_collection_script.sh", opts.prefix)
+    };
+    let collection_dest = format!("{}_all_files_copied", opts.prefix);
     
-    let sample_file_path_basename = format!("{}_basename_sample_lines.tsv", opts.prefix);
-    let files_file_path_basename = format!("{}_basename_files_md5sum_lines.tsv", opts.prefix);
+    //let sample_file_path_basename = format!("{}_basename_sample_lines.tsv", opts.prefix);
+    //let files_file_path_basename = format!("{}_basename_files_md5sum_lines.tsv", opts.prefix);
 
     println!("We are searching for files ending on either of these strings {:?}", opts.suffixes );
 
@@ -102,8 +109,23 @@ fn main(){
     #[cfg(not(unix))]
     let mut visited: std::collections::HashSet<std::path::PathBuf> = HashSet::new();
 
+
+    let mut visited_dirs: HashSet<PathBuf> = HashSet::new();
+
+    let walker = WalkDir::new(".")
+        .follow_links(true)
+        .into_iter()
+        .filter_entry(|e| {
+            if e.file_type().is_dir() {
+                let canon = std::fs::canonicalize(e.path()).unwrap_or_else(|_| e.path().to_path_buf());
+                visited_dirs.insert(canon)
+            } else {
+                true
+            }
+        });
+
     // Parse files and group by sample name, technicalities, and read type
-    for entry in WalkDir::new( "." ).follow_links(true).into_iter().filter_map(Result::ok) {
+    for entry in walker.filter_map(Result::ok) {
         let file_path = entry.path();
 
         // --- exclude folders/files EARLY (before metadata/canonicalize) ---
@@ -152,18 +174,43 @@ fn main(){
         }
     }
 
-    let _ = data.write_sample_files(&sample_file_path);
-    let _ = data.write_md5_files(&files_file_path);
-    let _ = data.write_sample_files_basename(&sample_file_path_basename);
-    let _ = data.write_md5_files_basename(&files_file_path_basename);
+    let _ = data.write_sample_files_basename(&sample_file_path);
+    let _ = data.write_md5_files_basename(&files_file_path);
+    let _ = if cfg!(windows) {
+        data.write_collect_all_files_script_ps1(&collection_script_path, &collection_dest)
+    } else {
+        data.write_collect_all_files_script_sh(&collection_script_path, &collection_dest)
+    };
 
-    println!("{}/{} files detected - data written to '{}', '{}', '{}' and '{}'", 
+    //let _ = data.write_sample_files_basename(&sample_file_path_basename);
+    //let _ = data.write_md5_files_basename(&files_file_path_basename);
+
+    let run_cmd = if cfg!(windows) {
+        format!(".\\{}", collection_script_path)
+    } else {
+        format!("bash {}", collection_script_path)
+    };
+
+    println!(
+        "\n{}/{} target files detected.\n\
+         \nOutput files:\n\
+         - Sample table      : {}\n\
+         - MD5 checksum table: {}\n\
+         - Collection script : {}\n\
+         - Copy destination  : {}\n\
+         \nNext steps:\n\
+         1) Review the TSV files for correctness.\n\
+         2) Run the collection script to gather all referenced files:\n\
+            {}\n\
+         3) Use the TSV files to fill in the official GEO submission spreadsheets.\n\
+         \nNote: These files are intermediate manifests. Experimental metadata must be added manually.\n",
         data.len(),
         id,
-        &sample_file_path,
-        &files_file_path, 
-        &sample_file_path_basename,
-        &files_file_path_basename
+        sample_file_path,
+        files_file_path,
+        collection_script_path,
+        collection_dest,
+        run_cmd
     );
 }
 
