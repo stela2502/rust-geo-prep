@@ -27,11 +27,11 @@ pub struct ParsedFile {
 
 impl ParsedFile {
 
-     fn tenx_zip_path(dir: &Path) -> PathBuf {
+     fn tenx_zip_path(dir: &Path) -> Option<PathBuf> {
         // put zip next to the directory, name it "<dirname>.zip"
         let parent = dir.parent().unwrap_or(dir);
-        let name = Self::tenx_sample_label(dir).expect("We could not identify a sample id here!");
-        parent.join(format!("{name}.zip"))
+        let name = Self::tenx_sample_label(dir)?;
+        Some(parent.join(format!("{name}.zip")))
     }
 
     fn find_ancestor_dir_named<'a>(start: &'a Path, marker: &str) -> Option<&'a Path> {
@@ -76,7 +76,16 @@ impl ParsedFile {
         let opts: FileOptions<()> = FileOptions::default()
             .compression_method(CompressionMethod::Deflated)
             .unix_permissions(0o644);
-        let zip_path = Self::tenx_zip_path(dir);
+        let zip_path = match Self::tenx_zip_path(dir){
+            Some(p) => p,
+            None => {
+                eprintln!("This path is not a 10x matrix triplet path: {}", dir.display() );
+                return Err(io::Error::new(
+                        io::ErrorKind::Unsupported,
+                        "materialize_tenx_zip could not identify a usable file name",
+                    ))
+            }
+        };
 
         // reuse if already exists and has some content
         if let Ok(md) = fs::metadata(&zip_path) {
