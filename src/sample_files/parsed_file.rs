@@ -30,8 +30,73 @@ impl ParsedFile {
      fn tenx_zip_path(dir: &Path) -> PathBuf {
         // put zip next to the directory, name it "<dirname>.zip"
         let parent = dir.parent().unwrap_or(dir);
-        let name = dir.file_name().and_then(|s| s.to_str()).unwrap_or("tenx");
+        let name = Self::tenx_sample_label(dir);
         parent.join(format!("{name}.zip"))
+    }
+
+    fn find_ancestor_dir_named<'a>(start: &'a Path, marker: &str) -> Option<&'a Path> {
+        let mut cur = Some(start);
+
+        while let Some(p) = cur {
+            if p.file_name().and_then(|s| s.to_str()) == Some(marker) {
+                return Some(p);
+            }
+            cur = p.parent();
+        }
+        None
+    }
+    fn folder_above_marker(start: &Path, marker: &str) -> Option<String> {
+        let marker_dir = Self::find_ancestor_dir_named(start, marker)?;
+        let parent = marker_dir.parent()?;
+
+        parent
+            .file_name()
+            .and_then(|s| s.to_str())
+            .map(|s| s.to_string())
+    }
+
+    fn tenx_sample_label(triplet_dir: &Path) -> String {
+        // triplet_dir is e.g. .../outs/filtered_feature_bc_matrix
+        // or .../filtered_feature_bc_matrix
+        let leaf = triplet_dir
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("tenx");
+
+        // Add a suffix that distinguishes filtered vs raw when possible
+        let suffix = match leaf {
+            "filtered_feature_bc_matrix" => "filtered",
+            "raw_feature_bc_matrix" => "raw",
+            _ => leaf, // fallback
+        };
+
+        // Preferred: folder ABOVE "outs" is the sample folder
+        if let Some(sample) = Self::folder_above_marker(triplet_dir, "outs") {
+            return format!("{sample}_{suffix}");
+        }
+
+        // Next best: direct parent folder name
+        if let Some(parent_name) = triplet_dir
+            .parent()
+            .and_then(|pp| pp.file_name())
+            .and_then(|s| s.to_str())
+        {
+            // If parent is literally "outs", go one higher
+            if parent_name == "outs" {
+                if let Some(grand) = triplet_dir
+                    .parent()
+                    .and_then(|pp| pp.parent())
+                    .and_then(|pp| pp.file_name())
+                    .and_then(|s| s.to_str())
+                {
+                    return format!("{grand}_{suffix}");
+                }
+            }
+            return format!("{parent_name}_{suffix}");
+        }
+
+        // Last resort
+        format!("tenx_{suffix}")
     }
 
     fn materialize_tenx_zip(dir: &Path) -> io::Result<PathBuf> {
@@ -42,7 +107,7 @@ impl ParsedFile {
         let opts: FileOptions<()> = FileOptions::default()
             .compression_method(CompressionMethod::Deflated)
             .unix_permissions(0o644);
-        let zip_path = Self::tenx_zip_path(dir);
+        let zip_path = Self::folder_above_marker(dir, "outs");
 
         // reuse if already exists and has some content
         if let Ok(md) = fs::metadata(&zip_path) {
@@ -392,5 +457,68 @@ impl ParsedFile {
             ctx.consume(&buf[..n]);
         }
         Ok(format!("{:x}", ctx.compute()))
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn above_outs_returns_sample_name_from_triplet_dir() {
+        let triplet_dir: PathBuf =
+            ["root","exp1","sampleA","outs","filtered_feature_bc_matrix"].iter().collect();
+
+        assert_eq!(
+            ParsedFile::folder_above_marker(&triplet_dir, "outs").as_deref(),
+            Some("sampleA")
+        );
+    }
+
+    #[test]
+    fn above_outs_returns_sample_name_from_file_under_triplet_dir() {
+        let file: PathBuf =
+            ["root","exp1","sampleA","outs","filtered_feature_bc_matrix","matrix.mtx.gz"]
+                .iter().collect();
+
+        let anchor = file.parent().unwrap(); // directory anchor
+        assert_eq!(
+            ParsedFile::folder_above_marker(anchor, "outs").as_deref(),
+            Some("sampleA")
+        );
+    }
+
+    #[test]
+    fn above_outs_returns_sample_name_for_raw_too() {
+        let file: PathBuf =
+            ["root","exp1","sampleA","outs","raw_feature_bc_matrix","barcodes.tsv.gz"]
+                .iter().collect();
+
+        let anchor = file.parent().unwrap();
+        assert_eq!(
+            ParsedFile::folder_above_marker(anchor, "outs").as_deref(),
+            Some("sampleA")
+        );
+    }
+
+    #[test]
+    fn above_outs_is_none_when_outs_not_present() {
+        let path: PathBuf =
+            ["root","exp1","sampleA","no_outs_here","filtered_feature_bc_matrix"].iter().collect();
+
+        assert_eq!(ParsedFile::folder_above_marker(&path, "outs"), None);
+    }
+
+    #[test]
+    fn above_outs_is_none_when_path_is_outs_itself() {
+        let outs: PathBuf = ["root","exp1","sampleA","outs"].iter().collect();
+
+        // Parent of outs is sampleA, so this SHOULD still work:
+        assert_eq!(
+            ParsedFile::folder_above_marker(&outs, "outs").as_deref(),
+            Some("sampleA")
+        );
     }
 }
