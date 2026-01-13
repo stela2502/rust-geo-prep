@@ -30,7 +30,7 @@ impl ParsedFile {
      fn tenx_zip_path(dir: &Path) -> PathBuf {
         // put zip next to the directory, name it "<dirname>.zip"
         let parent = dir.parent().unwrap_or(dir);
-        let name = Self::tenx_sample_label(dir);
+        let name = Self::tenx_sample_label(dir).expect("We could not identify a sample id here!");
         parent.join(format!("{name}.zip"))
     }
 
@@ -55,48 +55,17 @@ impl ParsedFile {
             .map(|s| s.to_string())
     }
 
-    fn tenx_sample_label(triplet_dir: &Path) -> String {
-        // triplet_dir is e.g. .../outs/filtered_feature_bc_matrix
-        // or .../filtered_feature_bc_matrix
-        let leaf = triplet_dir
-            .file_name()
-            .and_then(|s| s.to_str())
-            .unwrap_or("tenx");
+    fn tenx_sample_label(triplet_dir: &std::path::Path) -> Option<String> {
+        let leaf = triplet_dir.file_name()?.to_str()?;
 
-        // Add a suffix that distinguishes filtered vs raw when possible
         let suffix = match leaf {
             "filtered_feature_bc_matrix" => "filtered",
             "raw_feature_bc_matrix" => "raw",
-            _ => leaf, // fallback
+            _ => leaf,
         };
 
-        // Preferred: folder ABOVE "outs" is the sample folder
-        if let Some(sample) = Self::folder_above_marker(triplet_dir, "outs") {
-            return format!("{sample}_{suffix}");
-        }
-
-        // Next best: direct parent folder name
-        if let Some(parent_name) = triplet_dir
-            .parent()
-            .and_then(|pp| pp.file_name())
-            .and_then(|s| s.to_str())
-        {
-            // If parent is literally "outs", go one higher
-            if parent_name == "outs" {
-                if let Some(grand) = triplet_dir
-                    .parent()
-                    .and_then(|pp| pp.parent())
-                    .and_then(|pp| pp.file_name())
-                    .and_then(|s| s.to_str())
-                {
-                    return format!("{grand}_{suffix}");
-                }
-            }
-            return format!("{parent_name}_{suffix}");
-        }
-
-        // Last resort
-        format!("tenx_{suffix}")
+        let sample = Self::folder_above_marker(triplet_dir, "outs")?;
+        Some(format!("{sample}_{suffix}"))
     }
 
     fn materialize_tenx_zip(dir: &Path) -> io::Result<PathBuf> {
@@ -107,7 +76,7 @@ impl ParsedFile {
         let opts: FileOptions<()> = FileOptions::default()
             .compression_method(CompressionMethod::Deflated)
             .unix_permissions(0o644);
-        let zip_path = Self::folder_above_marker(dir, "outs");
+        let zip_path = Self::tenx_zip_path(dir);
 
         // reuse if already exists and has some content
         if let Ok(md) = fs::metadata(&zip_path) {
@@ -520,5 +489,57 @@ mod tests {
             ParsedFile::folder_above_marker(&outs, "outs").as_deref(),
             Some("sampleA")
         );
+    }
+
+
+    #[test]
+    fn tenx_sample_label_filtered() {
+        let triplet_dir: PathBuf =
+            ["root","exp1","sampleA","outs","filtered_feature_bc_matrix"].iter().collect();
+
+        assert_eq!(
+            ParsedFile::tenx_sample_label(&triplet_dir).as_deref(),
+            Some("sampleA_filtered")
+        );
+    }
+
+    #[test]
+    fn tenx_sample_label_raw() {
+        let triplet_dir: PathBuf =
+            ["root","exp1","sampleA","outs","raw_feature_bc_matrix"].iter().collect();
+
+        assert_eq!(
+            ParsedFile::tenx_sample_label(&triplet_dir).as_deref(),
+            Some("sampleA_raw")
+        );
+    }
+
+    #[test]
+    fn tenx_sample_label_from_file_anchor_parent() {
+        let file: PathBuf =
+            ["root","exp1","sampleA","outs","filtered_feature_bc_matrix","matrix.mtx.gz"]
+                .iter().collect();
+
+        let anchor = file.parent().unwrap(); // IMPORTANT: pass directory
+        assert_eq!(
+            ParsedFile::tenx_sample_label(anchor).as_deref(),
+            Some("sampleA_filtered")
+        );
+    }
+
+    #[test]
+    fn tenx_sample_label_none_when_outs_missing() {
+        let triplet_dir: PathBuf =
+            ["root","exp1","sampleA","no_outs_here","filtered_feature_bc_matrix"].iter().collect();
+
+        assert_eq!(ParsedFile::tenx_sample_label(&triplet_dir), None);
+    }
+
+    #[test]
+    fn tenx_sample_label_none_when_path_is_just_filtered_dir_no_context() {
+        // filtered_feature_bc_matrix without any sample/outs context
+        let triplet_dir: PathBuf = ["filtered_feature_bc_matrix"].iter().collect();
+
+        assert_eq!(ParsedFile::tenx_sample_label(&triplet_dir), None);
     }
 }
