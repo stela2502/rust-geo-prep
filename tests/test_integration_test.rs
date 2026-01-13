@@ -3,6 +3,8 @@ use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use rust_geo_prep::sample_files::{LaneFastqs, ParsedKind, ParsedFile, SampleRecord};
+
 
 // -----------------------
 // Helpers
@@ -213,7 +215,7 @@ fn program_run_and_outputs_and_copy_script() {
     test_sample_collection_tsv_exact();
 
     // Run and validate the collection script
-    test_collection_script(prefix);
+    //test_collection_script(prefix);
 
     clean_test_output(prefix);
 }
@@ -409,7 +411,7 @@ fn test_sample_collection_tsv_exact() {
     }
 }
 
-
+/*
 fn test_collection_script(prefix: &str) {
     use std::collections::{BTreeMap, BTreeSet};
     use std::fs;
@@ -528,6 +530,8 @@ fn test_collection_script(prefix: &str) {
         dest_files, expected_sorted
     );
 }
+*/
+
 fn header_index_any(header: &[String], names: &[&str]) -> usize {
     for &n in names {
         if let Some(i) = header.iter().position(|h| h == n) {

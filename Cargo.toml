@@ -7,3 +7,4 @@ edition = "2021"
 clap = { version = "3.0.14", features = ["derive"] }
 walkdir = "2.5.0"
 md5 = "0.7"
+zip = "7.0.0"
