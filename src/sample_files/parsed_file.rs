@@ -156,13 +156,14 @@ impl ParsedFile {
                 ( None, ParsedKind::Fastq { lane, role })
             } else if s.ends_with(".h5") {
                 (None, ParsedKind::H5)
-            } else if let Some(path) = Self::tenx_triplet_dir_from_file(p) {
-                if Self::looks_like_10x_triplet_dir(p)? {
-                    let zip_path = Self::materialize_tenx_zip(&path)?;
+            } else if let Some(dir) = Self::tenx_triplet_dir_from_file(p) {
+                if Self::looks_like_10x_triplet_dir(&dir)? {
+                    let zip_path = Self::materialize_tenx_zip(&dir)?;
                     (Some(zip_path), ParsedKind::TenX)
-                }else { 
-                    return Ok(None)
+                } else {
+                    return Ok(None);
                 }
+
             }else {
                 return Ok(None);
             }
@@ -197,14 +198,14 @@ impl ParsedFile {
     }
 
     fn tenx_triplet_dir_from_file(p: &Path) -> Option<PathBuf> {
-        // We only trigger on matrix.mtx.gz (best single trigger)
-        let fname = p.file_name()?.to_str()?;
-        if fname != "matrix.mtx.gz" {
-            return None;
+        let name = p.file_name()?.to_str()?;
+        match name {
+            "matrix.mtx.gz" | "barcodes.tsv.gz" | "features.tsv.gz" | "genes.tsv.gz" => {
+                p.parent().map(|pp| pp.to_path_buf())
+            }
+            _ => None,
         }
-        p.parent().map(|d| d.to_path_buf())
     }
-
 
     // ---------- path helpers ----------
 
