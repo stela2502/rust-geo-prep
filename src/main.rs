@@ -124,6 +124,8 @@ fn main(){
         format!("bash {}", collection_script_path)
     };
 
+
+
     println!(
         "\n{} target files detected; {} added and {} samples identified.\n\
          \nOutput files:\n\
@@ -145,7 +147,10 @@ fn main(){
         collection_script_path,
         collection_dest,
         run_cmd
-    );
+    );    
+    if data.force_experiment_prefix_export{
+        println!("Experiment names are part of the published file names as a sample id overlap was detected!")
+    }
 }
 
 
