@@ -19,10 +19,6 @@ struct Opts {
     #[clap(short, long, default_value="sample_collection")]
     prefix: String,
 
-    /// Omit md5sums (default calculate all)
-    #[clap(short, long )]
-    omit_md5: bool,
-
     /// File suffixes treated as target files
     ///
     /// Can be specified multiple times:
@@ -100,79 +96,16 @@ fn main(){
     println!("We are searching for files ending on either of these strings {:?}", opts.suffixes );
 
     
-    let mut data = SampleFiles::new( opts.omit_md5 );
-    let mut id= 0;
+    let mut data = SampleFiles::new();
     
-    #[cfg(unix)]
-    let mut visited: HashSet<(u64, u64)> = HashSet::new();
-
-    #[cfg(not(unix))]
-    let mut visited: std::collections::HashSet<std::path::PathBuf> = HashSet::new();
-
-
-    let mut visited_dirs: HashSet<PathBuf> = HashSet::new();
-
-    let walker = WalkDir::new(".")
-        .follow_links(true)
-        .into_iter()
-        .filter_entry(|e| {
-            if e.file_type().is_dir() {
-                let canon = std::fs::canonicalize(e.path()).unwrap_or_else(|_| e.path().to_path_buf());
-                visited_dirs.insert(canon)
-            } else {
-                true
-            }
-        });
-
-    // Parse files and group by sample name, technicalities, and read type
-    for entry in walker.filter_map(Result::ok) {
-        let file_path = entry.path();
-
-        // --- exclude folders/files EARLY (before metadata/canonicalize) ---
-        if is_excluded_path(file_path, &opts.exclude) {
-            continue;
-        }
-
-        // Only directories need loop protection
-        if let Ok(md) = file_path.metadata() {
-
-            if md.is_dir() {
-                #[cfg(unix)]
-                let key = (md.dev(), md.ino());
-
-                #[cfg(not(unix))]
-                let key = {
-                    // Windows fallback: canonicalized path
-                    use std::path::PathBuf;
-                    std::fs::canonicalize(&file_path)
-                        .unwrap_or_else(|_| PathBuf::from(file_path))
-                };
-
-
-                if !visited.insert(key) {
-                    // Already seen → skip this directory entirely
-                    // Prevents infinite recursion
-                    continue;
-                }
-            }
-        }
-        if let Some(file_name) = file_path.file_name().and_then(|n| n.to_str()) {
-            id +=1;
-            if opts.suffixes.iter().any(|s| file_name.ends_with(s)) {
-                let fname = match std::fs::canonicalize(file_path) {
-                    Ok(real) => real.to_string_lossy().to_string() ,
-                    Err(e) => {
-                        // If canonicalize fails, use the original path
-                        eprintln!("canonicalize - failed for {} with error {e:?}", file_path.display() );
-                        file_path.to_string_lossy().to_string()
-                    }
-                };
-                // this now internally checks if the file is a duplicate!
-                // it also handles 10x triplets so that they become unique, too.
-                data.add_file(&fname);
-            }
-        }
-    }
+    let id = match data.ingest_dir(".") {
+        Err(e) => {
+            eprintln!("\n❌ Failed while scanning input directories:");
+            eprintln!("   {e}\n");
+            std::process::exit(1);
+        },
+        Ok(i) => i,
+    };
 
     let _ = data.write_sample_files_basename(&sample_file_path);
     let _ = data.write_md5_files_basename(&files_file_path);
@@ -192,7 +125,7 @@ fn main(){
     };
 
     println!(
-        "\n{}/{} target files detected.\n\
+        "\n{};{} target files detected [samples; files].\n\
          \nOutput files:\n\
          - Sample table      : {}\n\
          - MD5 checksum table: {}\n\

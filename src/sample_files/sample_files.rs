@@ -38,12 +38,13 @@ impl SampleFiles {
     }
 
     /// Walk a directory, parse relevant items into ParsedFile, dedup backups, and add into SampleRecords.
-    pub fn ingest_dir<P: AsRef<Path>>(&mut self, scan_root: P) -> io::Result<()> {
+    pub fn ingest_dir<P: AsRef<Path>>(&mut self, scan_root: P) -> io::Result<usize> {
         let scan_root = scan_root.as_ref();
 
         // loop protection for dirs + avoid silly duplicates by canonical path
         let mut visited_dirs: HashSet<(u64, u64)> = HashSet::new();
         let mut visited_paths: HashSet<PathBuf> = HashSet::new();
+        let mut id = 0;
 
         for entry in WalkDir::new(scan_root).follow_links(true).into_iter().filter_map(Result::ok) {
             let p = entry.path();
@@ -81,11 +82,12 @@ impl SampleFiles {
                 self.update_export_flags(&parsed);
 
                 // now actually add it
+                id +=1;
                 self.add_file(parsed);
             }
         }
 
-        Ok(())
+        Ok(id)
     }
 
     /// The central “add_file”: takes a ParsedFile and routes it into the correct SampleRecord.
@@ -370,7 +372,7 @@ impl SampleFiles {
         let mut max_lanes: usize = 0;
 
         for (_key, rec) in &self.samples {
-            let roles = Self::all_roles_sorted(rec);
+            let roles = rec.all_roles_sorted();
             for r in roles {
                 global_roles.insert(r);
             }
@@ -414,7 +416,7 @@ impl SampleFiles {
         for key in keys {
             let rec = self.samples.get(&key).unwrap();
 
-            let src_folders = Self::collect_source_folders_for_record(rec);
+            let src_folders = rec.collect_source_folders_for_record();
             let sample_name = rec.name.clone();
 
             // TenX/H5 cells: GEO upload name or empty
@@ -433,7 +435,8 @@ impl SampleFiles {
             write!(f, "{}\t{}\t{}\t{}", src_folders, sample_name, tenx_cell, h5_cell)?;
 
             // Render lanes in sorted lane-key order, but pad to max_lanes
-            let lane_keys = Self::all_lane_keys_sorted(rec);
+            let mut lane_keys: Vec<String> = rec.lanes.keys().cloned().collect();
+            lane_keys.sort();
 
             for i in 0..max_lanes {
                 if let Some(lk) = lane_keys.get(i) {

@@ -25,11 +25,11 @@ impl LaneFastqs {
     /// Render FASTQ cells for this lane in the provided `roles` order.
     pub fn row_cells<F>(&self, roles: &[String], include_experiment: bool, fmt: &F) -> Vec<String>
     where
-        F: Fn(&str) -> String,
+        F: Fn(&ParsedFile) -> String,
     {
         roles
             .iter()
-            .map(|role| self.reads.get(role).map(|p| fmt(&p.path) ).unwrap_or_default())
+            .map(|role| self.reads.get(role).map(|p| fmt(&p) ).unwrap_or_default())
             .collect()
     }
 }

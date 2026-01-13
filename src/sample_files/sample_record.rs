@@ -42,7 +42,7 @@ impl SampleRecord {
     /// Render a single flattened row for this sample: Sample + TenX + H5 + (lane blocks...)
     pub fn row_cells<F>(&self, roles: &[String], include_experiment:bool, fmt: &F, max_lanes: usize) -> Vec<String>
     where
-        F: Fn(&str) -> String,
+        F: Fn(&ParsedFile) -> String,
     {
         let mut out = Vec::new();
 
@@ -96,12 +96,12 @@ impl SampleRecord {
         fastq + tenx + h5
     }
 
-        /// GEO sample name: prefix with experiment when conflicts exist.
-    pub fn geo_sample_name(&self, experiment: &str, sample: &str) -> String {
-        if self.force_experiment_prefix_export {
-            format!("{}_{}", experiment, sample)
+    /// GEO sample name: prefix with experiment when conflicts exist.
+    pub fn geo_sample_name(&self, force_experiment_prefix_export: bool ) -> String {
+        if force_experiment_prefix_export {
+            format!("{}_{}", self.experiment, self.name)
         } else {
-            sample.to_string()
+            self.name.to_string()
         }
     }
 
@@ -111,20 +111,22 @@ impl SampleRecord {
             .map(|pp| pp.to_string_lossy().to_string())
     }
 
-    fn collect_source_folders_for_record(rec: &SampleRecord) -> String {
+
+    /// Unique parent folders for all files referenced by this record, comma-separated.
+    pub fn collect_source_folders_for_record(&self) -> String {
         let mut set: BTreeSet<String> = BTreeSet::new();
 
-        if let Some(pf) = rec.tenx.as_ref() {
+        if let Some(pf) = self.tenx.as_ref() {
             if let Some(par) = Self::parent_dir_string(&pf.path) {
                 set.insert(par);
             }
         }
-        if let Some(pf) = rec.h5_files.as_ref() {
+        if let Some(pf) = self.h5_files.as_ref() {
             if let Some(par) = Self::parent_dir_string(&pf.path) {
                 set.insert(par);
             }
         }
-        for lane in rec.lanes.values() {
+        for lane in self.lanes.values() {
             for pf in lane.reads.values() {
                 if let Some(par) = Self::parent_dir_string(&pf.path) {
                     set.insert(par);
@@ -135,22 +137,22 @@ impl SampleRecord {
         set.into_iter().collect::<Vec<_>>().join(",")
     }
 
-    fn all_lane_keys_sorted(rec: &SampleRecord) -> Vec<String> {
-        let mut lanes: Vec<String> = rec.lanes.keys().cloned().collect();
+    /// Lane keys in stable order.
+    pub fn lane_keys_sorted(&self) -> Vec<String> {
+        let mut lanes: Vec<String> = self.lanes.keys().cloned().collect();
         lanes.sort();
         lanes
     }
 
-    fn all_roles_sorted(rec: &SampleRecord) -> Vec<String> {
-        // Gather all roles seen across lanes (I1/R1/R2/I2 etc.)
+    /// Role names in stable order (I1/I2/R1/R2 first, then the rest alphabetically).
+    pub fn all_roles_sorted(&self) -> Vec<String> {
         let mut set: BTreeSet<String> = BTreeSet::new();
-        for lane in rec.lanes.values() {
+        for lane in self.lanes.values() {
             for role in lane.reads.keys() {
                 set.insert(role.clone());
             }
         }
 
-        // Prefer canonical order when present
         let preferred = ["I1", "I2", "R1", "R2"];
         let mut out = Vec::new();
         for r in preferred {
@@ -158,9 +160,7 @@ impl SampleRecord {
                 out.push(r.to_string());
             }
         }
-        // any others alphabetically
         out.extend(set.into_iter());
         out
     }
-
 }
