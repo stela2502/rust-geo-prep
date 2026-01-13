@@ -98,6 +98,46 @@ impl ParsedFile {
 
         Ok(zip_path)
     }
+
+    fn looks_like_public_accession(fname: &str) -> bool {
+        // Common run / experiment / sample / project accessions seen in public archives
+        const PREFIXES: &[&str] = &[
+            // SRA/ENA/DDBJ runs
+            "SRR", "ERR", "DRR", "CRR",
+            // experiments
+            "SRX", "ERX", "DRX", "CRX",
+            // samples
+            "SRS", "ERS", "DRS", "CRS",
+            // studies/projects
+            "SRP", "ERP", "DRP", "CRP",
+            "PRJNA", "PRJEB", "PRJDB",
+            // biosample
+            "SAMN", "SAMEA", "SAMD",
+            // GEO
+            "GSM", "GSE",
+        ];
+
+        let f = fname.trim();
+
+        // Quick content markers typical for "converted" artifacts
+        if f.contains(".bam.") || f.contains(".cram.") || f.contains(".sam.") || f.contains(".annotated.") {
+            return true;
+        }
+
+        // Prefix + digits heuristic (avoids lots of false positives)
+        for &pre in PREFIXES {
+            if let Some(rest) = f.strip_prefix(pre) {
+                // require at least 5 digits to avoid "SRR1" type accidental matches
+                let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+                if digits.len() >= 5 {
+                    return true;
+                }
+            }
+        }
+
+        false
+    }
+
     /// One entrypoint: decide if path is relevant, classify, infer sample+experiment, compute md5 if file.
     pub fn from_path(scan_root: &Path, p: &Path) -> io::Result<Option<Self>> {
         let mut md = match fs::metadata(p) {
@@ -106,8 +146,12 @@ impl ParsedFile {
         };
 
         let (effective_path ,kind) = if md.is_file() {
+
             let s = p.to_string_lossy();
-            if s.ends_with(".fastq.gz") || s.ends_with(".fq.gz") {
+            if Self::looks_like_public_accession( &s ) {
+                // ignore public/archive-derived artifacts (SRR/ERR/DRR..., bam->fastq, annotated, etc.)
+                return Ok(None);
+            } else if s.ends_with(".fastq.gz") || s.ends_with(".fq.gz") {
                 let (lane, role) = Self::parse_fastq_lane_role(p)?;
                 ( None, ParsedKind::Fastq { lane, role })
             } else if s.ends_with(".h5") {

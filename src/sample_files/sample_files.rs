@@ -37,19 +37,71 @@ impl SampleFiles {
         self.samples.len()
     }
 
-    /// Walk a directory, parse relevant items into ParsedFile, dedup backups, and add into SampleRecords.
-    pub fn ingest_dir<P: AsRef<Path>>(&mut self, scan_root: P) -> io::Result<usize> {
+
+    fn is_excluded_path(p: &Path, excludes: &[String]) -> bool {
+        if excludes.is_empty() {
+            return false;
+        }
+        let p_str = p.to_string_lossy();
+        for ex in excludes {
+            if ex.is_empty() { continue; }
+            if p_str.contains(ex) { return true; }
+            if p.components().any(|c| c.as_os_str().to_string_lossy() == ex.as_str()) {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn matches_suffixes(p: &Path, suffixes: &[String]) -> bool {
+        if suffixes.is_empty() {
+            return true; // treat empty as "no filter"
+        }
+        let s = p.to_string_lossy();
+        suffixes.iter().any(|suf| s.ends_with(suf))
+    }
+
+    pub fn ingest_dir<P: AsRef<Path>>(
+        &mut self,
+        scan_root: P,
+        suffixes: &[String],
+        excludes: &[String],
+    ) -> io::Result<(usize, usize)> {
         let scan_root = scan_root.as_ref();
 
-        // loop protection for dirs + avoid silly duplicates by canonical path
         let mut visited_dirs: HashSet<(u64, u64)> = HashSet::new();
         let mut visited_paths: HashSet<PathBuf> = HashSet::new();
-        let mut id = 0;
+
+        let mut visited = 0usize;
+        let mut parsed_ok = 0usize;
+        let mut added = 0usize;
+        let mut ignored_backup = 0usize;
+        let mut ignored_unmatched = 0usize;
+
+        eprintln!(
+            "Scanning {} (suffixes: {:?}, excludes: {:?})",
+            scan_root.display(),
+            suffixes,
+            excludes
+        );
 
         for entry in WalkDir::new(scan_root).follow_links(true).into_iter().filter_map(Result::ok) {
             let p = entry.path();
+            visited += 1;
 
-            // directory loop protection
+            // Exclude early
+            if Self::is_excluded_path(p, excludes) {
+                continue;
+            }
+
+            // Optional suffix filter early (lets user ignore e.g. .mtx.gz)
+            // Note: directories won't match suffixes; that's fine because TenX is triggered by matrix.mtx.gz.
+            if p.is_file() && !Self::matches_suffixes(p, suffixes) {
+                ignored_unmatched += 1;
+                continue;
+            }
+
+            // directory loop protection (unix only; ok)
             if let Ok(md) = p.metadata() {
                 if md.is_dir() {
                     #[cfg(unix)]
@@ -63,32 +115,56 @@ impl SampleFiles {
                 }
             }
 
-            // avoid reprocessing same file path (canonicalized)
+            // avoid reprocessing same path
             let canon = std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
             if !visited_paths.insert(canon) {
                 continue;
             }
 
-            if let Some(mut parsed) = ParsedFile::from_path(scan_root, p)? {
-                // make sure md5 for file artifacts is populated (dirs return None)
-                let _ = parsed.ensure_md5sum()?;
-
-                // global dedup / conflict logic (backup folders)
-                if self.should_ignore_as_backup(&parsed) {
+            // Parse
+            let mut parsed = match ParsedFile::from_path(scan_root, p) {
+                Ok(Some(pf)) => pf,
+                Ok(None) => continue, // not relevant
+                Err(e) => {
+                    eprintln!("WARN: parse failed for {}: {}", p.display(), e);
                     continue;
                 }
+            };
 
-                // If content differs for same basename across experiments, we will need exp-prefix export
-                self.update_export_flags(&parsed);
+            parsed_ok += 1;
 
-                // now actually add it
-                id +=1;
-                self.add_file(parsed);
+            // md5 (unless omit_md5 is set internally)
+            if let Err(e) = parsed.ensure_md5sum() {
+                eprintln!("WARN: md5 failed for {}: {}", parsed.path, e);
+                // you can choose continue or keep; I'd keep but mark md5sum None
             }
+
+            // backup dedup
+            if self.should_ignore_as_backup(&parsed) {
+                ignored_backup += 1;
+                continue;
+            }
+
+            self.update_export_flags(&parsed);
+
+            // add
+            self.add_file(parsed);
+            added += 1;
         }
 
-        Ok(id)
+        eprintln!(
+            "Scan done. visited={} parsed={} added={} ignored_unmatched={} ignored_backup={} export_prefix={}",
+            visited,
+            parsed_ok,
+            added,
+            ignored_unmatched,
+            ignored_backup,
+            self.force_experiment_prefix_export
+        );
+
+        Ok((added, visited))
     }
+
 
     /// The central “add_file”: takes a ParsedFile and routes it into the correct SampleRecord.
     pub fn add_file(&mut self, parsed: ParsedFile) {

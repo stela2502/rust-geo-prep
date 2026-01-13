@@ -98,7 +98,7 @@ fn main(){
     
     let mut data = SampleFiles::new();
     
-    let id = match data.ingest_dir(".") {
+    let (added, visited) = match data.ingest_dir(".", &opts.suffixes, &opts.exclude) {
         Err(e) => {
             eprintln!("\n❌ Failed while scanning input directories:");
             eprintln!("   {e}\n");
@@ -125,7 +125,7 @@ fn main(){
     };
 
     println!(
-        "\n{};{} target files detected [samples; files].\n\
+        "\n{} target files detected; {} added and {} samples identified.\n\
          \nOutput files:\n\
          - Sample table      : {}\n\
          - MD5 checksum table: {}\n\
@@ -137,8 +137,9 @@ fn main(){
             {}\n\
          3) Use the TSV files to fill in the official GEO submission spreadsheets.\n\
          \nNote: These files are intermediate manifests. Experimental metadata must be added manually.\n",
+        visited, 
+        added,
         data.len(),
-        id,
         sample_file_path,
         files_file_path,
         collection_script_path,
