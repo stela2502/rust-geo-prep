@@ -177,7 +177,8 @@ impl ParsedFile {
             )
         })?;
 
-        let experiment = Self::detect_experiment(scan_root, &kind, p);
+        let experiment = Self::first_component_under_root(scan_root, p)
+        .expect("Please start this tool from the path containing your experiments in (unique) subfolders");
         let path = match effective_path {
             Some(p) => p.to_string_lossy().to_string(),
             None => p.to_string_lossy().to_string()
@@ -332,57 +333,6 @@ impl ParsedFile {
     }
 
     // ---------- experiment detection ----------
-
-    fn detect_experiment(scan_root: &Path, kind: &ParsedKind, p: &Path) -> String {
-        // You can make this more sophisticated per kind later (fastq marker, outs marker).
-        // For now: best-effort marker search; fallback to first component under scan_root.
-        let anchor = if p.extension().is_some() { p.parent().unwrap_or(p) } else { p };
-
-        let exp = match kind {
-            ParsedKind::Fastq { .. } => Self::folder_above_marker(anchor, "fastq")
-                .or_else(|| Self::first_component_under_root(scan_root, anchor)),
-            ParsedKind::TenX => Self::folder_above_marker(anchor, "outs")
-                .or_else(|| Self::folder_above_leaf(anchor, "filtered_feature_bc_matrix"))
-                .or_else(|| Self::first_component_under_root(scan_root, anchor)),
-            ParsedKind::H5 => Self::folder_above_marker(anchor, "outs")
-                .or_else(|| anchor.parent()
-                    .and_then(|pp| pp.file_name())
-                    .and_then(|s| s.to_str())
-                    .map(|s| s.to_string()))
-                .or_else(|| Self::first_component_under_root(scan_root, anchor)),
-        };
-
-        exp.unwrap_or_else(|| "exp1".to_string())
-    }
-
-    fn folder_above_marker(p: &Path, marker: &str) -> Option<String> {
-        let comps: Vec<String> = p
-            .components()
-            .filter_map(|c| match c {
-                Component::Normal(os) => Some(os.to_string_lossy().to_string()),
-                _ => None,
-            })
-            .collect();
-        let idx = comps.iter().rposition(|c| c.eq_ignore_ascii_case(marker))?;
-        if idx >= 1 { Some(comps[idx - 1].clone()) } else { None }
-    }
-
-    fn folder_above_leaf(p: &Path, leaf: &str) -> Option<String> {
-        let mut cur = Some(p);
-        while let Some(pp) = cur {
-            if pp.file_name()
-                .and_then(|s| s.to_str())
-                .map(|s| s.eq_ignore_ascii_case(leaf)) == Some(true)
-            {
-                return pp.parent()
-                    .and_then(|par| par.file_name())
-                    .and_then(|s| s.to_str())
-                    .map(|s| s.to_string());
-            }
-            cur = pp.parent();
-        }
-        None
-    }
 
     fn first_component_under_root(scan_root: &Path, p: &Path) -> Option<String> {
         let rel = p.strip_prefix(scan_root).ok().unwrap_or(p);
