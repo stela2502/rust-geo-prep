@@ -363,24 +363,34 @@ impl SampleFiles {
     }
 
     /// Generate bash script to copy all referenced files into DEST, using GEO filenames.
+    /// Groups copy commands by GEO sample name as comments.
     pub fn write_collect_all_files_script_sh<P: AsRef<Path>>(
         &mut self,
         script_path: P,
         dest: &str,
     ) -> io::Result<()> {
-        // Ensure md5 exists if you want scripts to be consistent with tables later
-        // (optional, but cheap since you already computed earlier)
+        // Ensure md5 exists (optional but keeps everything consistent)
         for pf in self.iter_all_parsed_files_mut() {
             let _ = pf.ensure_md5sum()?;
         }
 
-        // Collect pairs: (dst_name, src_path) for stable ordering
-        let mut pairs: Vec<(String, String)> = Vec::new();
+        // group: geo_sample_name -> Vec<(dst_name, src_path)>
+        let mut groups: std::collections::BTreeMap<String, Vec<(String, String)>> =
+            std::collections::BTreeMap::new();
+
         for pf in self.iter_all_parsed_files() {
+            let sample_key = self.geo_sample_name(&pf.experiment, &pf.sample);
             let dst_name = self.geo_filename(&pf.experiment, &pf.path);
-            pairs.push((dst_name, pf.path.clone()));
+            groups
+                .entry(sample_key)
+                .or_default()
+                .push((dst_name, pf.path.clone()));
         }
-        pairs.sort_by(|a, b| a.0.cmp(&b.0));
+
+        // sort within each group by destination name for stable scripts
+        for v in groups.values_mut() {
+            v.sort_by(|a, b| a.0.cmp(&b.0));
+        }
 
         let f = File::create(script_path)?;
         let mut w = BufWriter::new(f);
@@ -393,14 +403,26 @@ impl SampleFiles {
         writeln!(w, "COPY_CMD=(cp -f)")?;
         writeln!(w)?;
 
-        for (dst_name, src) in pairs {
-            writeln!(w, "\"${{COPY_CMD[@]}}\" \"{}\" \"$DEST/{}\"", src, dst_name)?;
+        for (geo_sample, pairs) in groups {
+            writeln!(w, "############################################")?;
+            writeln!(w, "## SAMPLE: {}", geo_sample)?;
+            writeln!(w, "############################################")?;
+            for (dst_name, src) in pairs {
+                writeln!(
+                    w,
+                    "\"${{COPY_CMD[@]}}\" \"{}\" \"$DEST/{}\"",
+                    src, dst_name
+                )?;
+            }
+            writeln!(w)?;
         }
 
         Ok(())
     }
 
+
     /// Generate PowerShell script to copy all referenced files into DEST, using GEO filenames.
+    /// Groups copy commands by GEO sample name as comments.
     pub fn write_collect_all_files_script_ps1<P: AsRef<Path>>(
         &mut self,
         script_path: P,
@@ -410,12 +432,22 @@ impl SampleFiles {
             let _ = pf.ensure_md5sum()?;
         }
 
-        let mut pairs: Vec<(String, String)> = Vec::new(); // (dst_name, src_path)
+        // group: geo_sample_name -> Vec<(dst_name, src_path)>
+        let mut groups: std::collections::BTreeMap<String, Vec<(String, String)>> =
+            std::collections::BTreeMap::new();
+
         for pf in self.iter_all_parsed_files() {
+            let sample_key = self.geo_sample_name(&pf.experiment, &pf.sample);
             let dst_name = self.geo_filename(&pf.experiment, &pf.path);
-            pairs.push((dst_name, pf.path.clone()));
+            groups
+                .entry(sample_key)
+                .or_default()
+                .push((dst_name, pf.path.clone()));
         }
-        pairs.sort_by(|a, b| a.0.cmp(&b.0));
+
+        for v in groups.values_mut() {
+            v.sort_by(|a, b| a.0.cmp(&b.0));
+        }
 
         let f = File::create(script_path)?;
         let mut w = BufWriter::new(f);
@@ -426,16 +458,23 @@ impl SampleFiles {
         writeln!(w, "New-Item -ItemType Directory -Force -Path $DEST | Out-Null")?;
         writeln!(w)?;
 
-        for (dst_name, src) in pairs {
-            writeln!(
-                w,
-                "Copy-Item -LiteralPath \"{}\" -Destination (Join-Path $DEST \"{}\") -Force",
-                src, dst_name
-            )?;
+        for (geo_sample, pairs) in groups {
+            writeln!(w, "############################################")?;
+            writeln!(w, "## SAMPLE: {}", geo_sample)?;
+            writeln!(w, "############################################")?;
+            for (dst_name, src) in pairs {
+                writeln!(
+                    w,
+                    "Copy-Item -LiteralPath \"{}\" -Destination (Join-Path $DEST \"{}\") -Force",
+                    src, dst_name
+                )?;
+            }
+            writeln!(w)?;
         }
 
         Ok(())
     }
+
 
     /// Recreates your old sample table writer, now backed by ParsedFile.
     /// The table uses GEO upload filenames (geo_filename) for TenX/H5/FASTQ cells.
