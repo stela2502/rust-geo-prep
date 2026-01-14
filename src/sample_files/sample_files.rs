@@ -190,7 +190,10 @@ impl SampleFiles {
                 }
             }
             ParsedKind::H5 => {
-                if rec.h5_files.is_some() {
+                if parsed.basename() != "filtered_feature_bc_matrix.h5" {
+                    // ignore
+                }
+                else if rec.h5_files.is_some() {
                     // if exact same path, ignore; otherwise warn
                     if rec.h5_files.as_ref().unwrap().path == parsed.path {
                         // ignore
@@ -334,6 +337,7 @@ impl SampleFiles {
         out
     }
 
+
     /// Write md5 table using GEO filename (basename or exp-prefixed basename, depending on geo_filename()).
     pub fn write_md5_files_basename<P: AsRef<Path>>(&mut self, out_path: P) -> io::Result<()> {
         // Ensure md5 is computed for all file-path ParsedFiles that need it.
@@ -344,7 +348,7 @@ impl SampleFiles {
         // Collect rows: (geo_file_name, md5)
         let mut rows: Vec<(String, String)> = Vec::new();
         for pf in self.iter_all_parsed_files() {
-            let geo_name = self.geo_filename(&pf.experiment, &pf.path);
+            let geo_name = pf.geo_filename();
             let md5 = pf.md5sum.clone().unwrap_or_else(|| "none".to_string());
             rows.push((geo_name, md5));
         }
@@ -380,7 +384,7 @@ impl SampleFiles {
 
         for pf in self.iter_all_parsed_files() {
             let sample_key = self.geo_sample_name(&pf.experiment, &pf.sample);
-            let dst_name = self.geo_filename(&pf.experiment, &pf.path);
+            let dst_name = pf.geo_filename();
             groups
                 .entry(sample_key)
                 .or_default()
@@ -438,7 +442,7 @@ impl SampleFiles {
 
         for pf in self.iter_all_parsed_files() {
             let sample_key = self.geo_sample_name(&pf.experiment, &pf.sample);
-            let dst_name = self.geo_filename(&pf.experiment, &pf.path);
+            let dst_name = pf.geo_filename();
             groups
                 .entry(sample_key)
                 .or_default()
@@ -470,6 +474,49 @@ impl SampleFiles {
                 )?;
             }
             writeln!(w)?;
+        }
+
+        Ok(())
+    }
+
+    /// Write a TSV listing FASTQ pairs (per sample+lane)
+    ///
+    /// Output columns:
+    /// Experiment, Sample, Lane, I1, I2, R1, R2
+    ///
+    /// Comment lines:
+    /// # EXPERIMENT: <name>
+    pub fn write_fastq_pairs_table<P: AsRef<Path>>(&self, out_path: P) -> io::Result<()> {
+        let mut f = BufWriter::new(File::create(out_path)?);
+
+        // We need a stable global header: determine maximum #lanes and role order.
+        // Approach: compute global max lanes and global role set.
+        let mut global_roles: BTreeSet<String> = BTreeSet::new();
+        let mut max_lanes: usize = 0;
+
+
+        // ---- header ----
+        write!(f, "Source_Path(s)\tSample_Lane\tPari1\tPair2\tPari3\tPair4")?;
+        writeln!(f)?;
+
+        // ---- rows ----
+        // Sort output by (experiment, sample) to keep stable
+        let mut keys: Vec<_> = self.samples.keys().cloned().collect();
+        keys.sort();
+
+        for key in keys {
+            let rec = self.samples.get(&key).unwrap();
+
+            let src_folders = rec.collect_source_folders_for_record();
+            let sample_name = rec.name.clone();
+
+            for pair in rec.lanes.values(){
+                writeln!(f, "{}\t{}\t{}", 
+                    src_folders, 
+                    sample_name, 
+                    pair.pair_row().join("\t")
+                )?;
+            }
         }
 
         Ok(())

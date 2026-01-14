@@ -253,7 +253,10 @@ impl ParsedFile {
     // ---------- path helpers ----------
 
     pub fn geo_filename(&self) -> String {
-        format!("{}_{}", self.experiment, self.basename() )
+        match self.kind {
+            ParsedKind::H5 => format!("{}_{}_{}", self.experiment, self.sample, self.basename() ),
+            _ => format!("{}_{}", self.experiment, self.basename() ),
+        }
     }
     pub fn basename(&self) -> String {
         Path::new(&self.path)
@@ -346,7 +349,9 @@ impl ParsedFile {
     fn detect_sample(kind: &ParsedKind, p: &Path) -> Option<String> {
         match kind {
             ParsedKind::Fastq { .. } => Self::sample_from_fastq_name(p),
-            ParsedKind::H5 | ParsedKind::TenX => Self::sample_from_parent_dir_or_stem(p),
+            ParsedKind::H5 => Self::folder_above_marker(p, "outs"),
+            //ParsedKind::H5 => Self::sample_from_parent_dir_or_stem(p),
+            ParsedKind::TenX => Self::folder_above_marker(p, "outs"),
         }
     }
 
@@ -420,7 +425,9 @@ impl ParsedFile {
         }
 
         let md5 = Self::compute_file_md5_incremental(p)?;
-        let _ = fs::write(&sidecar, format!("{md5}\n"));
+        if let Err(e) = fs::write(&sidecar, format!("{md5}\n")) {
+            eprintln!("Warning: could not write sidecar file {}: {}", sidecar.display(), e);
+        }
         self.md5sum = Some(md5);
         Ok(self.md5sum.as_deref())
     }
@@ -550,5 +557,14 @@ mod tests {
         let triplet_dir: PathBuf = ["filtered_feature_bc_matrix"].iter().collect();
 
         assert_eq!(ParsedFile::tenx_sample_label(&triplet_dir), None);
+    }
+
+    #[test]
+    fn h5_geo_filename() {
+        let p =  Path::new( "tests/data/test_h5/outs/filtered_feature_bc_matrix.h5");
+        let root = Path::new("tests/data/");
+        let h5rep = ParsedFile::from_path( &root, &p ).unwrap().unwrap();
+
+        assert_eq!(h5rep.geo_filename(), "test_h5_test_h5_filtered_feature_bc_matrix.h5");
     }
 }

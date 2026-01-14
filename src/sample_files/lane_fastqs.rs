@@ -32,4 +32,14 @@ impl LaneFastqs {
             .map(|role| self.reads.get(role).map(|p| fmt(&p) ).unwrap_or_default())
             .collect()
     }
+
+    /// Render FASTQ cells for this lane as simple paired info row
+    pub fn pair_row(&self ) -> Vec<String> 
+    {
+        self.reads
+            .values()
+            .map(|p| p.geo_filename() )
+            .collect()
+    }
+
 }

@@ -1,7 +1,7 @@
 
 use walkdir::WalkDir;
 use clap::Parser;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use std::collections::HashSet;
 #[cfg(unix)]
@@ -31,10 +31,10 @@ struct Opts {
     )]
     suffixes: Vec<String>,
 
-    /// File suffixes treated as target files
+    /// path names to ignore
     ///
     /// Can be specified multiple times:
-    ///   --suffix .fastq.gz --suffix .fq.gz
+    ///   --exclude old_experiment --exclude geo_downloaded_data
     #[clap(
         short = 'e',
         long = "exclude",
@@ -42,10 +42,9 @@ struct Opts {
     )]
     exclude: Vec<String>,
 
-    /// Allow collecting files with identical basenames in different directories
-    /// (required for 10x matrix / features / barcodes layouts)
+    /// Root directory. Each direct subfolder is an experiment.
     #[clap(short, long )]
-    allow_duplicates: bool,
+    input: Option<PathBuf>,
 
 }
 
@@ -83,6 +82,7 @@ fn main(){
     
     let sample_file_path = format!("{}.tsv", opts.prefix);
     let files_file_path = format!("{}_md5sum.tsv", opts.prefix);
+    let pairs_file_path = format!("{}_pairs.tsv", opts.prefix);
     let collection_script_path = if cfg!(windows) {
         format!("{}_collection_script.ps1", opts.prefix)
     } else {
@@ -95,10 +95,12 @@ fn main(){
 
     println!("We are searching for files ending on either of these strings {:?}", opts.suffixes );
 
+    let root = opts.input.as_deref().unwrap_or(Path::new("."));
+
     
     let mut data = SampleFiles::new();
     
-    let (added, visited) = match data.ingest_dir(".", &opts.suffixes, &opts.exclude) {
+    let (added, visited) = match data.ingest_dir(root, &opts.suffixes, &opts.exclude) {
         Err(e) => {
             eprintln!("\n❌ Failed while scanning input directories:");
             eprintln!("   {e}\n");
@@ -109,6 +111,7 @@ fn main(){
 
     let _ = data.write_sample_files_basename(&sample_file_path);
     let _ = data.write_md5_files_basename(&files_file_path);
+    let _ = data.write_fastq_pairs_table(&pairs_file_path );
     let _ = if cfg!(windows) {
         data.write_collect_all_files_script_ps1(&collection_script_path, &collection_dest)
     } else {
@@ -131,6 +134,7 @@ fn main(){
          \nOutput files:\n\
          - Sample table      : {}\n\
          - MD5 checksum table: {}\n\
+         - Pairs collection  : {}\n\
          - Collection script : {}\n\
          - Copy destination  : {}\n\
          \nNext steps:\n\
@@ -144,6 +148,7 @@ fn main(){
         data.len(),
         sample_file_path,
         files_file_path,
+        pairs_file_path,
         collection_script_path,
         collection_dest,
         run_cmd

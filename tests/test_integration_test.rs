@@ -169,7 +169,7 @@ fn run_rust_geo_prep(prefix: &str) {
 
     let output = Command::new(exe)
         .current_dir(test_data_dir)
-        .args(["--prefix", prefix])
+        .args(["--prefix", prefix]).args(["--exclude", "test_h5"])
         .output()
         .expect("Failed to execute rust-geo-prep");
 
