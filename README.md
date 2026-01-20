@@ -1,60 +1,275 @@
-[![Rust](https://github.com/stela2502/rust-geo-prep/actions/workflows/rust.yml/badge.svg)](https://github.com/stela2502/rust-geo-prep/actions/workflows/rust.yml)
 # rust-geo-prep
 
-The tool is designed to create two types of reference tables for a GEO submission. The initial project for this was a multi-year, multi-sample 10x-based single-cell experiment with a large number of FASTQ files.
+**A Rust CLI tool to prepare FASTQ and 10x data for GEO submission**
 
-GEO expects two types of information:
+Submitting sequencing data to GEO is tedious: FASTQs and 10x outputs are
+scattered across directories, samples must be grouped consistently, and
+MD5 checksums must be reported correctly. `rust-geo-prep` automates this
+process by scanning your project directory, grouping files into samples,
+computing MD5 sums, and generating reproducible collection scripts.
 
-1. A list of all files with their corresponding MD5 checksums.
-2. A table mapping each sample and sequencing lane to its associated files.
+------------------------------------------------------------------------
 
-This is a direct re-implementation of the [original Perl script](./get_sample_fastq_files.pl).\
-I decided to implement it in Rust because it is more convenient at the moment.
+## Features
 
-In terms of speed, rust might be a little faster but as the main bottleneck is reading the files and data from disk this difference will not be too impressive. 
-However, I prefer Rust’s testing framework over Perl’s, and distributing a compiled binary is simpler than setting up a Perl package.
+-   Recursively scans experiment folders
+-   Groups FASTQ files into GEO-ready sample groups
+-   Supports multiple FASTQ suffixes (e.g. `.fastq.gz`, `.fq.gz`)
+-   Supports 10x HDF5 / MTX triplets
+-   Excludes arbitrary paths
+-   Computes MD5 checksums for every file
+-   Generates deterministic, reproducible outputs
+-   Automatically resolves filename collisions during collection
+-   Designed for large HPC / shared-storage projects
+
+------------------------------------------------------------------------
 
 ## Installation
 
-You need to have the [Rust compiler](https://www.rust-lang.org/tools/install) installed.
+### From source
 
-To install `rust-geo-prep`, use Cargo:
-
-```sh
-cargo install --git https://github.com/stela2502/rust-geo-prep.git
+``` bash
+cargo install --git https://github.com/stela2502/rust-geo-prep
 ```
+
+Or build locally:
+
+``` bash
+cargo build --release
+cp target/release/rust-geo-prep ~/bin/
+```
+
+------------------------------------------------------------------------
 
 ## Usage
 
-When started, the tool scans all subfolders of the current folder and collects all "fastq.gz" files. It processes each file name by splitting it by '\_', dropping any `S\d`, `L\d\d\d`, and `[RI]` entries, and merging the rest into a sample name.
-
-The tool generates two output files for each type of reference table: one containing only the file basenames and another with the full file paths. This ensures that even if sample names are duplicated across sequencing runs, the absolute file path provides an additional level of distinction. Both output files maintain the same structure, meaning that corresponding samples are on the same line in each output, allowing easy cross-referencing.
-
-Run the script in the folder containing your data:
-```
-rust-geo-prep
+``` bash
+rust-geo-prep [OPTIONS]
 ```
 
-This will scan all subdirectories for fastq.gz files and process their filenames to extract sample and sequencing lane information.
+### Options
 
-The script will generate two sets of output files, each consisting of:
+  --------------------------------------------------------------------------
+  Option                    Description
+  ------------------------- ------------------------------------------------
+  `-i, --input <DIR>`       Root directory. Each direct subfolder is treated
+                            as one experiment
 
- - One version with only basenames (for GEO table submission).
- - One version with full paths (to ensure unique identification when needed).
+  `-e, --exclude <NAME>`    Path names to ignore (can be repeated)
 
-Output Files
-Files containing only basenames:
+  `-p, --prefix <PREFIX>`   Output file prefix (default:
+                            `sample_collection`)
 
- - sample_collection_basename_.files_md5sum_lines.tsv  
-    (List of MD5 checksums for each file, using only basenames.)
- - sample_collection_basename_.sample_lines.tsv  
-    (List of sequencing files grouped by sample and lane, using only basenames.)
+  `-s, --suffix <SUFFIX>`   File suffixes to include (can be repeated)
 
-Files containing full paths:
+  `-h, --help`              Show help
 
- - sample_collection_.files_md5sum_lines.tsv  
-    (List of MD5 checksums for each file, using absolute paths.)
- - sample_collection_.sample_lines.tsv  
-    (List of sequencing files grouped by sample and lane, using absolute paths.)
+  `-V, --version`           Show version
+  --------------------------------------------------------------------------
 
-This dual-output structure helps mitigate sample name collisions across sequencing runs while still providing a clean format for GEO submissions.
+Defaults:
+
+``` text
+suffixes: .fastq.gz .fq.gz
+prefix:   sample_collection
+```
+
+------------------------------------------------------------------------
+
+## Directory Layout Assumption
+
+``` text
+INPUT/
+  experiment_1/
+    sampleA_R1.fastq.gz
+    sampleA_R2.fastq.gz
+  experiment_2/
+    ...
+```
+
+Each **direct subfolder of `--input` is treated as one experiment**.
+
+------------------------------------------------------------------------
+
+## FASTQ Example
+
+``` bash
+rust-geo-prep \
+  --input /data/projects \
+  --exclude old_runs \
+  --exclude geo_downloaded_data \
+  --suffix .fastq.gz \
+  --suffix .fq.gz \
+  --prefix geo_submission
+```
+
+------------------------------------------------------------------------
+
+## 10x Matrix / HDF5 Example
+
+To collect 10x CellRanger outputs:
+
+``` bash
+rust-geo-prep \
+  --input /data/projects \
+  --suffix filtered_feature_bc_matrix.h5 \
+  --suffix matrix.mtx.gz \
+  --prefix geo_10x
+```
+
+This allows you to prepare:
+
+-   `filtered_feature_bc_matrix.h5`
+-   `matrix.mtx.gz` (and associated barcode / feature matrices if
+    present)
+
+for GEO submission using the same workflow.
+
+------------------------------------------------------------------------
+
+## Generated Files
+
+Typical outputs:
+
+  File                        Purpose
+  --------------------------- ------------------------------
+  `*_sample_collection.tsv`   GEO sample table
+  `*_files_md5sum.tsv`        MD5 checksum table
+  `*_fastq_pairs.tsv`         FASTQ R1/R2 pairing table
+  `*_collection_script.sh`    Bash collection script
+  `*_collection_script.ps1`   PowerShell collection script
+
+------------------------------------------------------------------------
+
+## FASTQ Pair Table
+
+The FASTQ pairs table contains one row per logical sample and groups:
+
+-   R1
+-   R2
+-   I1 / I2 (if present)
+
+into a single row. This makes it easy to inspect whether pairs are
+complete and consistent before submission.
+
+------------------------------------------------------------------------
+
+## Collection Scripts
+
+The generated scripts:
+
+-   `*_collection_script.sh`
+-   `*_collection_script.ps1`
+
+copy all referenced files into a single destination directory.
+
+### Automatic filename disambiguation
+
+If two samples would result in identical filenames, the tool
+automatically creates **unique filenames** during collection while
+keeping full traceability in the tables.
+
+This guarantees:
+
+-   No overwriting
+-   GEO-safe flat upload directories
+-   Stable reproducibility
+
+You do not need to resolve collisions manually.
+
+------------------------------------------------------------------------
+
+## GEO Workflow
+
+Recommended workflow:
+
+1.  Run `rust-geo-prep`
+2.  Inspect the generated TSV tables
+3.  Run the collection script to gather all referenced files into one
+    directory
+4.  Upload the collected directory to GEO
+5.  Use the MD5 table for GEO validation
+
+------------------------------------------------------------------------
+
+## Excluding Paths
+
+``` bash
+--exclude tmp --exclude backup --exclude geo_downloaded
+```
+
+Any path containing the excluded token is ignored.
+
+------------------------------------------------------------------------
+
+## Multiple Suffixes
+
+``` bash
+--suffix .fastq.gz --suffix .fq.gz
+```
+
+and to include the quantified data add
+
+``` bash
+--suffix filtered_feature_bc_matrix.h5 --suffix matrix.mtx.gz
+```
+
+All listed suffixes are treated as valid target files.
+
+------------------------------------------------------------------------
+
+## Platform Notes
+
+-   Linux/macOS: use the generated `.sh` script
+-   Windows: use the generated `.ps1` script
+-   Paths are preserved exactly as discovered
+
+------------------------------------------------------------------------
+
+## Reproducibility
+
+-   Files are sorted deterministically
+-   Grouping is stable
+-   MD5 sums are calculated on demand
+-   Scripts are reproducible
+
+------------------------------------------------------------------------
+
+## Troubleshooting
+
+### "Could not determine read role"
+
+Your FASTQ filename does not follow standard R1/R2/I1/I2 naming
+conventions.
+
+### Duplicate filenames
+
+Handled automatically by the collection script with unique renaming.
+
+------------------------------------------------------------------------
+
+## Philosophy
+
+`rust-geo-prep` does **not** try to infer experimental biology.
+
+It guarantees:
+
+-   Correct grouping
+-   Correct checksums
+-   GEO-compatible file handling
+
+Biological interpretation remains the responsibility of the researcher.
+
+------------------------------------------------------------------------
+
+## Author
+
+Stefan Lang\
+Division of Molecular Hematology, Lund University\
+ORCID: 0000-0002-0854-2328
+
+------------------------------------------------------------------------
+
+## License
+
+MIT License
