@@ -8,6 +8,16 @@ MD5 checksums must be reported correctly. `rust-geo-prep` automates this
 process by scanning your project directory, grouping files into samples,
 computing MD5 sums, and generating reproducible collection scripts.
 
+It assumes that you have grouped your data into experiment folders and that 
+both the FASTQ data and the count outputs are located in subfolders of this 
+main experiment folder.
+It further requires that files follow directory structures as created by 
+the CellRanger tool:
+
+- FASTQ files must contain the SampleID at the beginning of the filename and a read type identifier such as R1, R2, I1, or I2.
+- matrix.mtx.gz files must be located in <sample_id>/outs/filtered_feature_bc_matrix/ and be accompanied by features.tsv.gz and barcodes.tsv.gz.
+- filtered_feature_bc_matrix.h5 files must be located in <sample_id>/outs/.
+
 ------------------------------------------------------------------------
 
 ## Features
@@ -116,14 +126,14 @@ rust-geo-prep \
   --suffix matrix.mtx.gz \
   --prefix geo_10x
 ```
+And collect the files using the also created copy script.
 
-This allows you to prepare:
+This allows you to prepare unique:
 
--   `filtered_feature_bc_matrix.h5`
--   `matrix.mtx.gz` (and associated barcode / feature matrices if
-    present)
+-   `<sample_id>_filtered_feature_bc_matrix.h5`
+-   `<sample_id>.zip` (combining the 10x matrix triplets into one zip)
 
-for GEO submission using the same workflow.
+for GEO submission.
 
 ------------------------------------------------------------------------
 
@@ -166,7 +176,7 @@ copy all referenced files into a single destination directory.
 ### Automatic filename disambiguation
 
 If two samples would result in identical filenames, the tool
-automatically creates **unique filenames** during collection while
+automatically adds the experiment name to the **unique filenames** during collection while
 keeping full traceability in the tables.
 
 This guarantees:
