@@ -18,6 +18,9 @@ the CellRanger tool:
 - matrix.mtx.gz files must be located in <sample_id>/outs/filtered_feature_bc_matrix/ and be accompanied by features.tsv.gz and barcodes.tsv.gz.
 - filtered_feature_bc_matrix.h5 files must be located in <sample_id>/outs/.
 
+
+The tool generates GEO-ready sample tables, MD5 checksum reports, FASTQ pairing tables, and a platform-specific collection script that safely gathers all referenced files into a single upload directory.
+
 ------------------------------------------------------------------------
 
 ## Features

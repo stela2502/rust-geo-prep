@@ -322,25 +322,75 @@ impl ParsedFile {
     }
 
     fn find_lane_token(fname: &str) -> Option<String> {
-        // L001 style
-        let b = fname.as_bytes();
-        for i in 0..b.len().saturating_sub(4) {
-            if b[i] == b'L'
-                && b[i + 1].is_ascii_digit()
-                && b[i + 2].is_ascii_digit()
-                && b[i + 3].is_ascii_digit()
-            {
-                return Some(fname[i..i + 4].to_string());
+        // --- 1) Try to build S##_L### (recommended) ---
+        // Detect S token
+        let mut s_tok: Option<String> = None;
+        // Detect L token
+        let mut l_tok: Option<String> = None;
+
+        // We scan tokens split by '_' first because Illumina/bcl2fastq naming is underscore-heavy.
+        // This also works for "example3_1_R1" numeric lane style.
+        for part in fname.split('_') {
+            if s_tok.is_none() {
+                // S7 / s7
+                if part.len() >= 2 && (part.starts_with('S') || part.starts_with('s')) {
+                    let digits = &part[1..];
+                    if !digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit()) {
+                        s_tok = Some(format!("S{}", digits));
+                    }
+                }
+            }
+
+            if l_tok.is_none() {
+                // L001 style (exactly L + 3 digits)
+                if part.len() >= 4 {
+                    let bytes = part.as_bytes();
+                    if (bytes[0] == b'L' || bytes[0] == b'l')
+                        && bytes[1].is_ascii_digit()
+                        && bytes[2].is_ascii_digit()
+                        && bytes[3].is_ascii_digit()
+                    {
+                        l_tok = Some(format!("L{}", &part[1..4]));
+                    }
+                }
+            }
+
+            if s_tok.is_some() && l_tok.is_some() {
+                break;
             }
         }
-        // numeric lane like "_1_" (example3_1_R1)
-        // take first "_<digits>_" occurrence
-        let parts: Vec<&str> = fname.split('_').collect();
-        for part in parts {
+
+        if let (Some(s), Some(l)) = (s_tok.clone(), l_tok.clone()) {
+            return Some(format!("{s}_{l}")); // e.g. "S7_L001"
+        }
+
+        // --- 2) Fall back to L001 style anywhere in the string ---
+        // (keeps your original behavior but also catches non-underscore formats)
+        if l_tok.is_none() {
+            let b = fname.as_bytes();
+            for i in 0..b.len().saturating_sub(4) {
+                if (b[i] == b'L' || b[i] == b'l')
+                    && b[i + 1].is_ascii_digit()
+                    && b[i + 2].is_ascii_digit()
+                    && b[i + 3].is_ascii_digit()
+                {
+                    // Normalize to uppercase L
+                    let digits = &fname[i + 1..i + 4];
+                    return Some(format!("L{}", digits));
+                }
+            }
+        } else {
+            // We already found an L token from underscore splitting
+            return l_tok;
+        }
+
+        // --- 3) Numeric lane like "_1_" (example3_1_R1): take first all-digit token ---
+        for part in fname.split('_') {
             if !part.is_empty() && part.chars().all(|c| c.is_ascii_digit()) {
                 return Some(part.to_string());
             }
         }
+
         None
     }
 
