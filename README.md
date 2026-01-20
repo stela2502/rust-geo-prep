@@ -1,3 +1,4 @@
+[![Rust](https://github.com/stela2502/rust-geo-prep/actions/workflows/rust.yml/badge.svg)](https://github.com/stela2502/rust-geo-prep/actions/workflows/rust.yml)
 # rust-geo-prep
 
 **A Rust CLI tool to prepare FASTQ and 10x data for GEO submission**
