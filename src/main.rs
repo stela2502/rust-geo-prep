@@ -1,11 +1,6 @@
 
-use walkdir::WalkDir;
 use clap::Parser;
 use std::path::{Path, PathBuf};
-
-use std::collections::HashSet;
-#[cfg(unix)]
-use std::os::unix::fs::MetadataExt;
 
 use rust_geo_prep::sample_files::SampleFiles;
 
@@ -48,34 +43,6 @@ struct Opts {
 
 }
 
-fn is_excluded_path(p: &std::path::Path, excludes: &[String]) -> bool {
-    if excludes.is_empty() {
-        return false;
-    }
-
-    // Compare on a stable string form (works even if parts are non-utf8-ish: fallback lossy)
-    let p_str = p.to_string_lossy();
-
-    // Also check components to support excluding by folder name (e.g. "outs", "fastq_path")
-    for ex in excludes {
-        if ex.is_empty() {
-            continue;
-        }
-
-        // 1) Full substring match on the whole path (most flexible)
-        if p_str.contains(ex) {
-            return true;
-        }
-
-        // 2) Folder/component exact match (exclude by directory name)
-        if p.components()
-            .any(|c| c.as_os_str().to_string_lossy() == ex.as_str())
-        {
-            return true;
-        }
-    }
-    false
-}
 
 fn main(){
     let opts: Opts = Opts::parse();

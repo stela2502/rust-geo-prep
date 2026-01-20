@@ -1,13 +1,14 @@
 // src/sample_files/sample_files.rs
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::io::{self, BufWriter, Write};
-use std::path::{Path, PathBuf};
+// PathBuf is necessary!
+#[allow(unused_imports)]
+use std::path::{PathBuf, Path };
 
 use std::fs::File;
 
 use walkdir::WalkDir;
 
-use crate::sample_files::lane_fastqs::LaneFastqs;
 use crate::sample_files::sample_record::SampleRecord;
 use crate::sample_files::parsed_file::{ParsedFile, ParsedKind};
 
@@ -491,8 +492,8 @@ impl SampleFiles {
 
         // We need a stable global header: determine maximum #lanes and role order.
         // Approach: compute global max lanes and global role set.
-        let mut global_roles: BTreeSet<String> = BTreeSet::new();
-        let mut max_lanes: usize = 0;
+        // let mut global_roles: BTreeSet<String> = BTreeSet::new();
+        // let mut max_lanes: usize = 0;
 
 
         // ---- header ----
@@ -604,7 +605,7 @@ impl SampleFiles {
                 if let Some(lk) = lane_keys.get(i) {
                     let lane = rec.lanes.get(lk).unwrap();
                     let fmt = |pf: &ParsedFile| pf.geo_filename();
-                    let cells = lane.row_cells(&roles_vec, self.force_experiment_prefix_export, &fmt);
+                    let cells = lane.row_cells(&roles_vec, &fmt);
                     for c in cells {
                         write!(f, "\t{}", c)?;
                     }

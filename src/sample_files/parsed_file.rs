@@ -183,7 +183,7 @@ impl ParsedFile {
 
     /// One entrypoint: decide if path is relevant, classify, infer sample+experiment, compute md5 if file.
     pub fn from_path(scan_root: &Path, p: &Path) -> io::Result<Option<Self>> {
-        let mut md = match fs::metadata(p) {
+        let md = match fs::metadata(p) {
             Ok(m) => m,
             Err(e) => return Err(e),
         };
@@ -400,25 +400,11 @@ impl ParsedFile {
         match kind {
             ParsedKind::Fastq { .. } => Self::sample_from_fastq_name(p),
             ParsedKind::H5 => Self::folder_above_marker(p, "outs"),
-            //ParsedKind::H5 => Self::sample_from_parent_dir_or_stem(p),
             ParsedKind::TenX => Self::folder_above_marker(p, "outs"),
         }
     }
 
-    fn sample_from_parent_dir_or_stem(p: &Path) -> Option<String> {
-        // your existing logic, but fixed/cleaned: "grandparent folder name else stem"
-        if let Some(parent) = p
-            .parent()
-            .and_then(|pp| pp.parent())
-            .and_then(|gp| gp.file_name())
-            .and_then(|s| s.to_str())
-        {
-            if !parent.is_empty() {
-                return Some(parent.to_string());
-            }
-        }
-        p.file_stem().and_then(|s| s.to_str()).map(|s| s.to_string())
-    }
+
 
     fn sample_from_fastq_name(p: &Path) -> Option<String> {
         // Default: cut at first marker token

@@ -23,7 +23,7 @@ impl LaneFastqs {
     }
 
     /// Render FASTQ cells for this lane in the provided `roles` order.
-    pub fn row_cells<F>(&self, roles: &[String], include_experiment: bool, fmt: &F) -> Vec<String>
+    pub fn row_cells<F>(&self, roles: &[String], fmt: &F) -> Vec<String>
     where
         F: Fn(&ParsedFile) -> String,
     {

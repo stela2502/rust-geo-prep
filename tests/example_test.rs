@@ -3,13 +3,16 @@
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::process::Command;
+use assert_cmd::cargo;
+use assert_cmd::prelude::*;
 
 use flate2::write::GzEncoder;
 use flate2::Compression;
 use tempfile::TempDir;
 
 fn keep_dir_on_err(tmp: TempDir, err: impl std::fmt::Display) -> ! {
-    let path: PathBuf = tmp.into_path(); // prevents cleanup
+    let path: PathBuf = tmp.keep(); // prevents cleanup
     panic!("{err}\n\nTest workspace kept at:\n  {}", path.display());
 }
 
@@ -130,8 +133,7 @@ fn cli_runs_on_example_tree_and_creates_outputs() {
         fs::create_dir_all(prefix.parent().unwrap()).map_err(|e| e.to_string())?;
 
         // Run binary
-        let mut cmd = assert_cmd::Command::cargo_bin("rust-geo-prep")
-            .map_err(|e| format!("binary rust-geo-prep not built: {e}"))?;
+        let mut cmd = Command::new(cargo::cargo_bin!());//.map_err(|e| format!("binary rust-geo-prep not built: {e}"))?;
 
         cmd.arg("--input")
             .arg(input.as_os_str())

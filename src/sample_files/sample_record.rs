@@ -2,7 +2,7 @@
 use super::{LaneFastqs, ParsedFile};
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Path, PathBuf};
+use std::path::{Path};
 
 
 #[derive(Debug, Default)]
@@ -40,7 +40,7 @@ impl SampleRecord {
     }
 
     /// Render a single flattened row for this sample: Sample + TenX + H5 + (lane blocks...)
-    pub fn row_cells<F>(&self, roles: &[String], include_experiment:bool, fmt: &F, max_lanes: usize) -> Vec<String>
+    pub fn row_cells<F>(&self, roles: &[String], fmt: &F, max_lanes: usize) -> Vec<String>
     where
         F: Fn(&ParsedFile) -> String,
     {
@@ -55,7 +55,7 @@ impl SampleRecord {
         // lane blocks (sorted by key)
         let mut lane_count = 0usize;
         for (_lane_key, lane) in &self.lanes {
-            out.extend(lane.row_cells(roles, include_experiment, fmt));
+            out.extend(lane.row_cells(roles, fmt));
             lane_count += 1;
         }
 
