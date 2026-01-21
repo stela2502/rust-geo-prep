@@ -147,11 +147,11 @@ Typical outputs:
 
   File                        Purpose
   --------------------------- ------------------------------
-  `*_sample_collection.tsv`   GEO sample table
-  `*_files_md5sum.tsv`        MD5 checksum table
-  `*_fastq_pairs.tsv`         FASTQ R1/R2 pairing table
-  `*_collection_script.sh`    Bash collection script
-  `*_collection_script.ps1`   PowerShell collection script
+  - `*_sample_collection.tsv`   GEO sample table
+  - `*_files_md5sum.tsv`        MD5 checksum table
+  - `*_fastq_pairs.tsv`         FASTQ R1/R2 pairing table
+  - `*_collection_script.sh`    Bash collection script
+  - `*_collection_script.ps1`   PowerShell collection script
 
 ------------------------------------------------------------------------
 
