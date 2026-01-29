@@ -150,8 +150,8 @@ Typical outputs:
   - `*_sample_collection.tsv`   GEO sample table
   - `*_files_md5sum.tsv`        MD5 checksum table
   - `*_fastq_pairs.tsv`         FASTQ R1/R2 pairing table
-  - `*_collection_script.sh`    Bash collection script
-  - `*_collection_script.ps1`   PowerShell collection script
+  - `*_collection_script.sh`    Bash collection script (UNIX)
+  - `*_collection_script.ps1`   PowerShell collection script (Windows)
 
 ------------------------------------------------------------------------
 
@@ -283,6 +283,9 @@ Division of Molecular Hematology, Lund University\
 ORCID: 0000-0002-0854-2328
 
 ------------------------------------------------------------------------
+
+## Publication (not reviewed)
+https://www.researchgate.net/publication/400206881_rust-geo-prep_A_Rust_CLI_for_Preparing_FASTQ_and_10x_Cell_Ranger_Outputs_for_GEO_Submission
 
 ## License
 
