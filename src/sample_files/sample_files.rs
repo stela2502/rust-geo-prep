@@ -67,6 +67,7 @@ impl SampleFiles {
         scan_root: P,
         suffixes: &[String],
         excludes: &[String],
+        experiment_override: Option<&str>,
     ) -> io::Result<(usize, usize)> {
         let scan_root = scan_root.as_ref();
 
@@ -123,7 +124,7 @@ impl SampleFiles {
             }
 
             // Parse
-            let mut parsed = match ParsedFile::from_path(scan_root, p) {
+            let mut parsed = match ParsedFile::from_path(scan_root, p, experiment_override) {
                 Ok(Some(pf)) => pf,
                 Ok(None) => continue, // not relevant
                 Err(e) => {

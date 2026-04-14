@@ -4,9 +4,20 @@ use std::path::{Path, PathBuf};
 
 use rust_geo_prep::sample_files::SampleFiles;
 
-/// Submitting data to GEO is complex. 
-/// This tool helps by collecting the different fastq files and grouping them into samples groups.
-/// It also calculates the md5sums and reports them for every fastq file.
+/// Submitting sequencing data to GEO is complex and error-prone.
+///
+/// This tool scans a directory of sequencing output files (e.g. FASTQ, 10x matrices, HDF5),
+/// automatically groups them into samples based on filename conventions,
+/// and prepares the information required for GEO submission.
+///
+/// Specifically, it:
+///   - identifies and groups FASTQ files into sample/lane/read pairs
+///   - detects 10x Genomics outputs and HDF5 matrices
+///   - calculates md5 checksums for all relevant files
+///   - generates tables and helper scripts for collecting and uploading files
+///
+/// The goal is to reduce manual work and ensure consistent, reproducible
+/// preparation of sequencing datasets for GEO submission.
 #[derive(Parser)]
 #[clap(version = "1.0.0", author = "Stefan L. <stefan.lang@med.lu.se>")]
 struct Opts {
@@ -41,6 +52,20 @@ struct Opts {
     #[clap(short, long )]
     input: Option<PathBuf>,
 
+    /// Override the experiment name.
+    ///
+    /// By default, the tool assumes that each subdirectory of `--input`
+    /// represents a separate experiment and derives the experiment name
+    /// from the folder structure.
+    ///
+    /// If you instead scan a single folder containing FASTQ files directly,
+    /// you MUST provide an experiment name using this option.
+    /// Otherwise, files may not be grouped correctly into samples.
+    #[clap(
+        long = "experiment",
+    )]
+    experiment: Option<String>,
+
 }
 
 
@@ -67,7 +92,12 @@ fn main(){
     
     let mut data = SampleFiles::new();
     
-    let (added, visited) = match data.ingest_dir(root, &opts.suffixes, &opts.exclude) {
+    let (added, visited) = match data.ingest_dir(
+        root, 
+        &opts.suffixes, 
+        &opts.exclude, 
+        opts.experiment.as_deref(), 
+        ) {
         Err(e) => {
             eprintln!("\n❌ Failed while scanning input directories:");
             eprintln!("   {e}\n");

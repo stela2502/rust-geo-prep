@@ -182,7 +182,7 @@ impl ParsedFile {
     }
 
     /// One entrypoint: decide if path is relevant, classify, infer sample+experiment, compute md5 if file.
-    pub fn from_path(scan_root: &Path, p: &Path) -> io::Result<Option<Self>> {
+    pub fn from_path(scan_root: &Path, p: &Path, experiment_override: Option<&str>,) -> io::Result<Option<Self>> {
         let md = match fs::metadata(p) {
             Ok(m) => m,
             Err(e) => return Err(e),
@@ -220,9 +220,12 @@ impl ParsedFile {
                 format!("Could not infer sample for path {}", p.display()),
             )
         })?;
+        let experiment = match experiment_override {
+            Some(exp) => exp.to_string(),
+            None => Self::first_component_under_root(scan_root, p)
+                .expect("Please start this tool from the path containing your experiments in (unique) subfolders"),
+        };
 
-        let experiment = Self::first_component_under_root(scan_root, p)
-        .expect("Please start this tool from the path containing your experiments in (unique) subfolders");
         let path = match effective_path {
             Some(p) => p.to_string_lossy().to_string(),
             None => p.to_string_lossy().to_string()
@@ -599,7 +602,7 @@ mod tests {
     fn h5_geo_filename() {
         let p =  Path::new( "tests/data/test_h5/outs/filtered_feature_bc_matrix.h5");
         let root = Path::new("tests/data/");
-        let h5rep = ParsedFile::from_path( &root, &p ).unwrap().unwrap();
+        let h5rep = ParsedFile::from_path( &root, &p, None ).unwrap().unwrap();
 
         assert_eq!(h5rep.geo_filename(), "test_h5_test_h5_filtered_feature_bc_matrix.h5");
     }
