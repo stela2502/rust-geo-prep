@@ -3,6 +3,13 @@ name = "rust-geo-prep"
 version = "1.1.0"
 edition = "2021"
 
+description = "Tool to collect, group, and prepare sequencing files (FASTQ, 10x, HDF5) for GEO submission, including md5 checksum generation and sample table creation."
+license = "MIT"
+repository = "https://github.com/stela2502/geo_sample_prep"
+homepage = "https://github.com/stela2502/geo_sample_prep"
+documentation = "https://github.com/stela2502/geo_sample_prep#readme"
+
+
 [dependencies]
 clap = { version = "3.0.14", features = ["derive"] }
 walkdir = "2.5.0"

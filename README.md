@@ -61,13 +61,13 @@ cp target/release/rust-geo-prep ~/bin/
 rust-geo-prep [OPTIONS]
 ```
 
-### Options
-
   --------------------------------------------------------------------------
   Option                    Description
   ------------------------- ------------------------------------------------
   `-i, --input <DIR>`       Root directory. Each direct subfolder is treated
                             as one experiment
+
+  `    --experiment <EXPERIMENT>    Override the experiment name
 
   `-e, --exclude <NAME>`    Path names to ignore (can be repeated)
 
@@ -80,6 +80,7 @@ rust-geo-prep [OPTIONS]
 
   `-V, --version`           Show version
   --------------------------------------------------------------------------
+
 
 Defaults:
 
